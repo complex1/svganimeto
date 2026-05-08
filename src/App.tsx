@@ -4,8 +4,11 @@ import { LeftToolbar } from '@/components/LeftToolbar'
 import { Canvas } from '@/components/canvas/Canvas'
 import { RightInspector } from '@/components/RightInspector'
 import { LayersPanel } from '@/components/LayersPanel'
+import { SymbolsPanel } from '@/components/SymbolsPanel'
 import { TimelinePanel } from '@/components/Timeline/TimelinePanel'
 import { ExportDialog } from '@/components/ExportDialog'
+import { DialogHost } from '@/components/DialogHost'
+import { SymbolEditBanner } from '@/components/SymbolEditBanner'
 import { useEditorStore } from '@/store/editorStore'
 import { usePlaybackLoop } from '@/hooks/usePlaybackLoop'
 import { applyImportedSvg, importSvgFile, openProjectFile, saveProjectFile } from '@/ipc/fileActions'
@@ -75,13 +78,16 @@ export default function App() {
       if (mode === 'draw') {
         const key = e.key.toLowerCase()
         if (key === 'v') setActiveTool('select')
+        if (key === 'g') setActiveTool('shape-builder')
         if (key === 'r') setActiveTool('rect')
         if (key === 'o') setActiveTool('circle')
         if (key === 'e') setActiveTool('ellipse')
         if (key === 'l') setActiveTool('line')
         if (key === 'p') setActiveTool('pen')
+        if (key === 'i') setActiveTool('pencil')
         if (key === 'n') setActiveTool('path-edit')
         if (key === 'b') setActiveTool('brush')
+        if (key === 'x') setActiveTool('eraser')
         if (key === 't') setActiveTool('text')
       }
     }
@@ -91,7 +97,9 @@ export default function App() {
 
   return (
     <div className="app-root">
+      <DialogHost />
       <TopBar />
+      <SymbolEditBanner />
       <div className="app-layout">
         <LeftToolbar />
         <main className="area-center">
@@ -103,6 +111,7 @@ export default function App() {
           style={{ display: 'flex', flexDirection: 'row', minHeight: 0, minWidth: 0 }}
         >
           <LayersPanel expanded={mode === 'draw'} />
+          {mode === 'draw' && <SymbolsPanel expanded={mode === 'draw'} />}
           {(mode === 'animate' || mode === 'preview') && (
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
               <TimelinePanel />

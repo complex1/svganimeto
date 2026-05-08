@@ -1,12 +1,19 @@
 import { nanoid } from 'nanoid'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faChevronDown, faChevronRight, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons'
 import { useEditorStore } from '@/store/editorStore'
+import { dialogConfirm } from '@/store/dialogStore'
 import { ElementRenderer } from '@/components/canvas/ElementRenderer'
 import { SelectionOverlay } from '@/components/canvas/SelectionOverlay'
 import { defaultTransform, type VectorElement } from '@/types/document'
 import { flattenForLayers, updateElementById } from '@/engines/document/tree'
 import type { DrawTool } from '@/store/editorStore'
 import type { PathPoint, PathPointMode } from '@/types/document'
+import { elementShapeToPathD } from '@/engines/geometry/shapeToPath'
+import { buildPencilPathD } from '@/engines/geometry/pencilPath'
+import { CanvasGuideOverlay } from '@/components/canvas/CanvasGuideOverlay'
+import type { CanvasGuideType } from '@/types/canvasGuide'
 
 type BrushKind = 'solid' | 'marker' | 'texture'
 type BrushSettings = {
@@ -218,78 +225,6 @@ function nearestOnCubic(
     }
   }
   return { t: bestT, x: best.x, y: best.y, dist2: bestDist2 }
-}
-
-function parsePointList(input: string) {
-  const nums = input
-    .trim()
-    .split(/[\s,]+/)
-    .map((n) => Number(n))
-    .filter((n) => Number.isFinite(n))
-  const points: Array<{ x: number; y: number }> = []
-  for (let i = 0; i + 1 < nums.length; i += 2) {
-    points.push({ x: nums[i], y: nums[i + 1] })
-  }
-  return points
-}
-
-function rectToPathD(x: number, y: number, w: number, h: number, rx = 0, ry = 0) {
-  const rrx = Math.max(0, Math.min(rx || 0, w / 2))
-  const rry = Math.max(0, Math.min(ry || 0, h / 2))
-  if (rrx <= 0 && rry <= 0) {
-    return `M ${x} ${y} L ${x + w} ${y} L ${x + w} ${y + h} L ${x} ${y + h} Z`
-  }
-  return [
-    `M ${x + rrx} ${y}`,
-    `L ${x + w - rrx} ${y}`,
-    `A ${rrx} ${rry} 0 0 1 ${x + w} ${y + rry}`,
-    `L ${x + w} ${y + h - rry}`,
-    `A ${rrx} ${rry} 0 0 1 ${x + w - rrx} ${y + h}`,
-    `L ${x + rrx} ${y + h}`,
-    `A ${rrx} ${rry} 0 0 1 ${x} ${y + h - rry}`,
-    `L ${x} ${y + rry}`,
-    `A ${rrx} ${rry} 0 0 1 ${x + rrx} ${y}`,
-    'Z'
-  ].join(' ')
-}
-
-function elementShapeToPathD(type: string, attrs: Record<string, unknown>) {
-  const n = (v: unknown, fallback = 0) => (typeof v === 'number' ? v : Number(v ?? fallback))
-  if (type === 'rect') {
-    return rectToPathD(
-      n(attrs.x),
-      n(attrs.y),
-      Math.max(0, n(attrs.width)),
-      Math.max(0, n(attrs.height)),
-      Math.max(0, n(attrs.rx)),
-      Math.max(0, n(attrs.ry))
-    )
-  }
-  if (type === 'circle') {
-    const cx = n(attrs.cx)
-    const cy = n(attrs.cy)
-    const r = Math.max(0, n(attrs.r))
-    return `M ${cx - r} ${cy} A ${r} ${r} 0 1 0 ${cx + r} ${cy} A ${r} ${r} 0 1 0 ${cx - r} ${cy} Z`
-  }
-  if (type === 'ellipse') {
-    const cx = n(attrs.cx)
-    const cy = n(attrs.cy)
-    const rx = Math.max(0, n(attrs.rx))
-    const ry = Math.max(0, n(attrs.ry))
-    return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`
-  }
-  if (type === 'line') {
-    return `M ${n(attrs.x1)} ${n(attrs.y1)} L ${n(attrs.x2)} ${n(attrs.y2)}`
-  }
-  if (type === 'polygon' || type === 'polyline') {
-    const pts = parsePointList(String(attrs.points ?? ''))
-    if (pts.length < 2) return null
-    const d = pts
-      .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`)
-      .join(' ')
-    return type === 'polygon' ? `${d} Z` : d
-  }
-  return null
 }
 
 function ellipseToPathPoints(cx: number, cy: number, rx: number, ry: number): PathPoint[] {
@@ -504,7 +439,6 @@ export function Canvas() {
   const wrapRef = useRef<HTMLDivElement>(null)
   const project = useEditorStore((s) => s.project)
   const viewBox = useEditorStore((s) => s.viewBox)
-  const zoom = useEditorStore((s) => s.zoom)
   const tracks = useEditorStore((s) => s.tracks)
   const currentTime = useEditorStore((s) => s.currentTime)
   const select = useEditorStore((s) => s.select)
@@ -519,10 +453,44 @@ export function Canvas() {
   const setElementAttrs = useEditorStore((s) => s.setElementAttrs)
   const setElements = useEditorStore((s) => s.setElements)
   const pushHistory = useEditorStore((s) => s.pushHistory)
+  const applyEraserStroke = useEditorStore((s) => s.applyEraserStroke)
+  const canvasGuideType = useEditorStore((s) => s.canvasGuideType)
+  const canvasGuideSpacing = useEditorStore((s) => s.canvasGuideSpacing)
+  const canvasGuideOpacity = useEditorStore((s) => s.canvasGuideOpacity)
+  const canvasGuideHorizon = useEditorStore((s) => s.canvasGuideHorizon)
+  const canvasGuideColor = useEditorStore((s) => s.canvasGuideColor)
+  const canvasGuideOverlayVisible = useEditorStore((s) => s.canvasGuideOverlayVisible)
+  const canvasGuidePanelCollapsed = useEditorStore((s) => s.canvasGuidePanelCollapsed)
+  const canvasGuideVp1 = useEditorStore((s) => s.canvasGuideVp1)
+  const canvasGuideVpLeft = useEditorStore((s) => s.canvasGuideVpLeft)
+  const canvasGuideVpRight = useEditorStore((s) => s.canvasGuideVpRight)
+  const canvasGuideVpTop = useEditorStore((s) => s.canvasGuideVpTop)
+  const canvasGuideFisheyeCenter = useEditorStore((s) => s.canvasGuideFisheyeCenter)
+  const setCanvasGuideType = useEditorStore((s) => s.setCanvasGuideType)
+  const setCanvasGuideSpacing = useEditorStore((s) => s.setCanvasGuideSpacing)
+  const setCanvasGuideOpacity = useEditorStore((s) => s.setCanvasGuideOpacity)
+  const setCanvasGuideHorizon = useEditorStore((s) => s.setCanvasGuideHorizon)
+  const setCanvasGuideColor = useEditorStore((s) => s.setCanvasGuideColor)
+  const setCanvasGuideOverlayVisible = useEditorStore((s) => s.setCanvasGuideOverlayVisible)
+  const setCanvasGuidePanelCollapsed = useEditorStore((s) => s.setCanvasGuidePanelCollapsed)
+
+  const guideVpDragRef = useRef<{ kind: 'vp1' | 'vpL' | 'vpR' | 'vpT' | 'fish'; pointerId: number } | null>(
+    null
+  )
 
   const [spaceDown, setSpaceDown] = useState(false)
   const [draft, setDraft] = useState<{
-    tool: Exclude<DrawTool, 'select' | 'text' | 'pen' | 'path-edit'>
+    tool: Exclude<
+      DrawTool,
+      | 'select'
+      | 'shape-builder'
+      | 'text'
+      | 'pen'
+      | 'path-edit'
+      | 'pencil'
+      | 'eraser'
+      | 'brush'
+    >
     start: { x: number; y: number }
     current: { x: number; y: number }
   } | null>(null)
@@ -548,6 +516,17 @@ export function Canvas() {
   const [brushPreview, setBrushPreview] = useState<{ stamps: BrushStamp[]; settings: BrushSettings } | null>(
     null
   )
+  const [pencilSettings, setPencilSettings] = useState({
+    smoothing: 0.42,
+    strokeWidth: 2.5,
+    color: '#111827'
+  })
+  const [pencilPreview, setPencilPreview] = useState<Vec2[] | null>(null)
+  const pencilStrokeRef = useRef<{ pointerId: number; raw: Vec2[] } | null>(null)
+  const lastPencilCommitRef = useRef<{ d: string; at: number } | null>(null)
+  const [eraserSettings, setEraserSettings] = useState({ width: 22 })
+  const [eraserPreview, setEraserPreview] = useState<Vec2[] | null>(null)
+  const eraserStrokeRef = useRef<{ pointerId: number; raw: Vec2[] } | null>(null)
   const pathPointMenuRef = useRef<HTMLDivElement | null>(null)
   const panning = useRef<{ x: number; y: number } | null>(null)
   const lastPenCommitRef = useRef<{ d: string; at: number } | null>(null)
@@ -647,6 +626,34 @@ export function Canvas() {
     [addElement, project.elements.length]
   )
 
+  const commitPencilStroke = useCallback(
+    (raw: Vec2[]) => {
+      const d = buildPencilPathD(raw, pencilSettings.smoothing)
+      if (!d) return
+      const now = Date.now()
+      const last = lastPencilCommitRef.current
+      if (last && last.d === d && now - last.at < 250) return
+      lastPencilCommitRef.current = { d, at: now }
+      addElement({
+        id: nanoid(10),
+        name: `Pencil ${project.elements.length + 1}`,
+        type: 'path',
+        attrs: {
+          d,
+          fill: 'none',
+          stroke: pencilSettings.color,
+          'stroke-width': pencilSettings.strokeWidth,
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round'
+        },
+        transform: defaultTransform(),
+        visible: true,
+        locked: false
+      })
+    },
+    [addElement, pencilSettings.smoothing, pencilSettings.color, pencilSettings.strokeWidth, project.elements.length]
+  )
+
   const selectedPath = (() => {
     if (selectedIds.length !== 1) return null
     const id = selectedIds[0]
@@ -681,6 +688,20 @@ export function Canvas() {
     if (activeTool !== 'brush') {
       setBrushPreview(null)
       brushStrokeRef.current = null
+    }
+  }, [activeTool])
+
+  useEffect(() => {
+    if (activeTool !== 'pencil') {
+      setPencilPreview(null)
+      pencilStrokeRef.current = null
+    }
+  }, [activeTool])
+
+  useEffect(() => {
+    if (activeTool !== 'eraser') {
+      setEraserPreview(null)
+      eraserStrokeRef.current = null
     }
   }, [activeTool])
 
@@ -788,7 +809,14 @@ export function Canvas() {
     }
     if (selectedPath.closed) considerSegment(points.length - 1, 0)
     if (!best) return
-    const bestHit = best
+    const bestHit = best as {
+      segIdx: number
+      t: number
+      x: number
+      y: number
+      cubic: boolean
+      dist2: number
+    }
 
     const insertAt = bestHit.segIdx + 1
     if (!bestHit.cubic) {
@@ -847,49 +875,55 @@ export function Canvas() {
         clicked.type !== 'path' &&
         ['rect', 'circle', 'ellipse', 'line', 'polygon', 'polyline'].includes(clicked.type)
       ) {
-        const shouldConvert = window.confirm(
-          `Convert "${clicked.name}" (${clicked.type}) to editable path?`
-        )
-        if (shouldConvert) {
-          const d = elementShapeToPathD(clicked.type, clicked.attrs as Record<string, unknown>)
-          if (d) {
-            const n = (v: unknown, fallback = 0) =>
-              typeof v === 'number' ? v : Number(v ?? fallback)
-            const shapePoints =
-              clicked.type === 'circle'
-                ? ellipseToPathPoints(
-                    n((clicked.attrs as Record<string, unknown>).cx),
-                    n((clicked.attrs as Record<string, unknown>).cy),
-                    Math.max(0, n((clicked.attrs as Record<string, unknown>).r)),
-                    Math.max(0, n((clicked.attrs as Record<string, unknown>).r))
-                  )
-                : clicked.type === 'ellipse'
+        void dialogConfirm({
+          message: `Convert "${clicked.name}" (${clicked.type}) to editable path?`,
+          confirmLabel: 'Convert',
+          cancelLabel: 'Cancel'
+        }).then((shouldConvert) => {
+          if (shouldConvert) {
+            const d = elementShapeToPathD(clicked.type, clicked.attrs as Record<string, unknown>)
+            if (d) {
+              const n = (v: unknown, fallback = 0) =>
+                typeof v === 'number' ? v : Number(v ?? fallback)
+              const shapePoints =
+                clicked.type === 'circle'
                   ? ellipseToPathPoints(
                       n((clicked.attrs as Record<string, unknown>).cx),
                       n((clicked.attrs as Record<string, unknown>).cy),
-                      Math.max(0, n((clicked.attrs as Record<string, unknown>).rx)),
-                      Math.max(0, n((clicked.attrs as Record<string, unknown>).ry))
+                      Math.max(0, n((clicked.attrs as Record<string, unknown>).r)),
+                      Math.max(0, n((clicked.attrs as Record<string, unknown>).r))
                     )
-                  : null
-            const nextD =
-              shapePoints && shapePoints.length > 1 ? pathDFromPoints(shapePoints, true) : d
-            const nextElements = updateElementById(useEditorStore.getState().project.elements, id, (el) => ({
-              ...el,
-              type: 'path',
-              attrs: {
-                ...el.attrs,
-                d: nextD,
-                ...(shapePoints
-                  ? {
-                      __pathPoints: shapePoints,
-                      __pathClosed: true
-                    }
-                  : {})
-              }
-            }))
-            setElements(nextElements)
+                  : clicked.type === 'ellipse'
+                    ? ellipseToPathPoints(
+                        n((clicked.attrs as Record<string, unknown>).cx),
+                        n((clicked.attrs as Record<string, unknown>).cy),
+                        Math.max(0, n((clicked.attrs as Record<string, unknown>).rx)),
+                        Math.max(0, n((clicked.attrs as Record<string, unknown>).ry))
+                      )
+                    : null
+              const nextD =
+                shapePoints && shapePoints.length > 1 ? pathDFromPoints(shapePoints, true) : d
+              const nextElements = updateElementById(useEditorStore.getState().project.elements, id, (el) => ({
+                ...el,
+                type: 'path',
+                attrs: {
+                  ...el.attrs,
+                  d: nextD,
+                  ...(shapePoints
+                    ? {
+                        __pathPoints: shapePoints,
+                        __pathClosed: true
+                      }
+                    : {})
+                }
+              }))
+              setElements(nextElements)
+            }
           }
-        }
+          if (shiftKey) addToSelection(id)
+          else select([id])
+        })
+        return
       }
       if (shiftKey) addToSelection(id)
       else select([id])
@@ -897,30 +931,35 @@ export function Canvas() {
     [activeTool, addToSelection, select, setElements]
   )
 
-  const onWheel = (e: React.WheelEvent) => {
-    if (!svgRef.current || !wrapRef.current) return
-    e.preventDefault()
-    const vb = useEditorStore.getState().viewBox
-    const rect = wrapRef.current.getBoundingClientRect()
+  /** React's onWheel is passive in many browsers → preventDefault ignored. Use capture + non-passive native listener. */
+  useLayoutEffect(() => {
     const svg = svgRef.current
-    const p = clientToSvg(svg, e.clientX, e.clientY)
-    const factor = Math.exp(-e.deltaY * 0.001)
-    const nw = Math.max(50, vb.width / factor)
-    const nh = Math.max(50, vb.height / factor)
-    const rx = (p.x - vb.x) / vb.width
-    const ry = (p.y - vb.y) / vb.height
-    const nx = p.x - nw * rx
-    const ny = p.y - nh * ry
-    setViewBox({ x: nx, y: ny, width: nw, height: nh })
-    void rect
-    void zoom
-  }
+    if (!svg) return
+
+    const wheelOpts: AddEventListenerOptions = { passive: false }
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const vb = useEditorStore.getState().viewBox
+      const p = clientToSvg(svg, e.clientX, e.clientY)
+      const factor = Math.exp(-e.deltaY * 0.001)
+      const nw = Math.max(50, vb.width / factor)
+      const nh = Math.max(50, vb.height / factor)
+      const rx = (p.x - vb.x) / vb.width
+      const ry = (p.y - vb.y) / vb.height
+      const nx = p.x - nw * rx
+      const ny = p.y - nh * ry
+      setViewBox({ x: nx, y: ny, width: nw, height: nh })
+    }
+
+    svg.addEventListener('wheel', handleWheel, wheelOpts)
+    return () => svg.removeEventListener('wheel', handleWheel, wheelOpts)
+  }, [setViewBox])
 
   const onBgPointerDown = (e: React.PointerEvent) => {
     const isLeft = e.button === 0
     const drawEnabled =
       mode === 'draw' &&
-      ['rect', 'circle', 'ellipse', 'line', 'pen', 'brush', 'text'].includes(activeTool)
+      ['rect', 'circle', 'ellipse', 'line', 'pen', 'pencil', 'eraser', 'brush', 'text'].includes(activeTool)
     const targetEl = e.target as HTMLElement
     const overArtboard = e.target === e.currentTarget || targetEl.dataset?.artboard === '1'
 
@@ -942,6 +981,18 @@ export function Canvas() {
           rand
         }
         setBrushPreview({ stamps: [firstStamp], settings: settingsSnapshot })
+        ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
+        return
+      }
+      if (activeTool === 'pencil') {
+        pencilStrokeRef.current = { pointerId: e.pointerId, raw: [p] }
+        setPencilPreview([p])
+        ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
+        return
+      }
+      if (activeTool === 'eraser') {
+        eraserStrokeRef.current = { pointerId: e.pointerId, raw: [p] }
+        setEraserPreview([p])
         ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
         return
       }
@@ -990,7 +1041,17 @@ export function Canvas() {
         return
       }
       setDraft({
-        tool: activeTool as Exclude<DrawTool, 'select' | 'text' | 'pen' | 'path-edit'>,
+        tool: activeTool as Exclude<
+          DrawTool,
+          | 'select'
+          | 'shape-builder'
+          | 'text'
+          | 'pen'
+          | 'path-edit'
+          | 'pencil'
+          | 'eraser'
+          | 'brush'
+        >,
         start: p,
         current: p
       })
@@ -1009,6 +1070,48 @@ export function Canvas() {
   }
 
   const onBgPointerMove = (e: React.PointerEvent) => {
+    const gv = guideVpDragRef.current
+    if (gv && gv.pointerId === e.pointerId && svgRef.current && mode !== 'export') {
+      const st = useEditorStore.getState()
+      const pw = st.project.width
+      const ph = st.project.height
+      if (pw > 0 && ph > 0) {
+        const pt = clientToSvg(svgRef.current, e.clientX, e.clientY)
+        const nx = pt.x / pw
+        const ny = pt.y / ph
+        if (gv.kind === 'vp1') st.setCanvasGuideVp1({ nx, ny })
+        else if (gv.kind === 'vpL') st.setCanvasGuideVpLeft({ nx, ny })
+        else if (gv.kind === 'vpR') st.setCanvasGuideVpRight({ nx, ny })
+        else if (gv.kind === 'vpT') st.setCanvasGuideVpTop({ nx, ny })
+        else if (gv.kind === 'fish') st.setCanvasGuideFisheyeCenter({ nx, ny })
+      }
+      return
+    }
+
+    if (activeTool === 'pencil' && pencilStrokeRef.current && svgRef.current) {
+      const stroke = pencilStrokeRef.current
+      if (stroke.pointerId === e.pointerId) {
+        const p = clientToSvg(svgRef.current, e.clientX, e.clientY)
+        const prev = stroke.raw[stroke.raw.length - 1]
+        if (Math.hypot(p.x - prev.x, p.y - prev.y) >= 0.35) {
+          stroke.raw.push(p)
+          setPencilPreview([...stroke.raw])
+        }
+        return
+      }
+    }
+    if (activeTool === 'eraser' && eraserStrokeRef.current && svgRef.current) {
+      const stroke = eraserStrokeRef.current
+      if (stroke.pointerId === e.pointerId) {
+        const p = clientToSvg(svgRef.current, e.clientX, e.clientY)
+        const prev = stroke.raw[stroke.raw.length - 1]
+        if (Math.hypot(p.x - prev.x, p.y - prev.y) >= 0.35) {
+          stroke.raw.push(p)
+          setEraserPreview([...stroke.raw])
+        }
+        return
+      }
+    }
     if (activeTool === 'brush' && brushStrokeRef.current && svgRef.current) {
       const stroke = brushStrokeRef.current
       if (stroke.pointerId === e.pointerId) {
@@ -1122,6 +1225,44 @@ export function Canvas() {
   }
 
   const onBgPointerUp = (e: React.PointerEvent) => {
+    if (guideVpDragRef.current?.pointerId === e.pointerId) {
+      guideVpDragRef.current = null
+      try {
+        ;(e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+      return
+    }
+
+    if (pencilStrokeRef.current?.pointerId === e.pointerId) {
+      const raw = pencilStrokeRef.current.raw
+      pencilStrokeRef.current = null
+      setPencilPreview(null)
+      if (raw.length >= 2) {
+        commitPencilStroke(raw)
+      }
+      try {
+        ;(e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+      return
+    }
+    if (eraserStrokeRef.current?.pointerId === e.pointerId) {
+      const raw = eraserStrokeRef.current.raw
+      eraserStrokeRef.current = null
+      setEraserPreview(null)
+      if (raw.length >= 2) {
+        applyEraserStroke(raw, eraserSettings.width)
+      }
+      try {
+        ;(e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+      return
+    }
     if (brushStrokeRef.current?.pointerId === e.pointerId) {
       const stroke = brushStrokeRef.current
       brushStrokeRef.current = null
@@ -1260,12 +1401,16 @@ export function Canvas() {
   }
 
   const canvasCursor =
-    mode === 'draw' && activeTool !== 'select'
+    mode === 'draw' &&
+    activeTool !== 'select' &&
+    activeTool !== 'shape-builder'
       ? activeTool === 'text'
         ? 'text'
         : activeTool === 'path-edit'
           ? 'default'
-          : 'crosshair'
+          : activeTool === 'eraser'
+            ? 'cell'
+            : 'crosshair'
       : 'default'
 
   return (
@@ -1291,6 +1436,16 @@ export function Canvas() {
           brushStrokeRef.current = null
           setBrushPreview(null)
         }
+        if (activeTool === 'pencil' && e.key === 'Escape') {
+          e.preventDefault()
+          pencilStrokeRef.current = null
+          setPencilPreview(null)
+        }
+        if (activeTool === 'eraser' && e.key === 'Escape') {
+          e.preventDefault()
+          eraserStrokeRef.current = null
+          setEraserPreview(null)
+        }
       }}
       onKeyUp={(e) => {
         if (e.code === 'Space') setSpaceDown(false)
@@ -1301,7 +1456,6 @@ export function Canvas() {
         width="100%"
         height="100%"
         viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
-        onWheel={onWheel}
         onPointerDown={onBgPointerDown}
         onPointerMove={onBgPointerMove}
         onPointerUp={onBgPointerUp}
@@ -1312,7 +1466,13 @@ export function Canvas() {
           setPenDraft(null)
         }}
         onContextMenu={(e) => {
-          if (activeTool === 'path-edit' || activeTool === 'pen' || activeTool === 'brush') {
+          if (
+            activeTool === 'path-edit' ||
+            activeTool === 'pen' ||
+            activeTool === 'brush' ||
+            activeTool === 'pencil' ||
+            activeTool === 'eraser'
+          ) {
             e.preventDefault()
           }
         }}
@@ -1327,8 +1487,218 @@ export function Canvas() {
           fill="#f4f5f7"
           stroke="#d0d4dc"
         />
+        <defs>
+          <clipPath id="canvas-guide-clip">
+            <rect x={0} y={0} width={project.width} height={project.height} />
+          </clipPath>
+          {project.gradients.map((g) =>
+            g.kind === 'linear' ? (
+              <linearGradient
+                key={g.id}
+                id={g.id}
+                x1={g.x1}
+                y1={g.y1}
+                x2={g.x2}
+                y2={g.y2}
+                gradientUnits={g.gradientUnits}
+              >
+                {g.stops.map((s, i) => (
+                  <stop
+                    key={`${g.id}-${i}`}
+                    offset={`${Math.round(Math.max(0, Math.min(1, s.offset)) * 100)}%`}
+                    stopColor={s.color}
+                    stopOpacity={s.opacity ?? 1}
+                  />
+                ))}
+              </linearGradient>
+            ) : (
+              <radialGradient
+                key={g.id}
+                id={g.id}
+                cx={g.cx}
+                cy={g.cy}
+                r={g.r}
+                fx={g.fx}
+                fy={g.fy}
+                gradientUnits={g.gradientUnits}
+              >
+                {g.stops.map((s, i) => (
+                  <stop
+                    key={`${g.id}-${i}`}
+                    offset={`${Math.round(Math.max(0, Math.min(1, s.offset)) * 100)}%`}
+                    stopColor={s.color}
+                    stopOpacity={s.opacity ?? 1}
+                  />
+                ))}
+              </radialGradient>
+            )
+          )}
+        </defs>
+        {canvasGuideType !== 'none' &&
+          canvasGuideOverlayVisible &&
+          mode !== 'export' && (
+          <>
+            {/* Clip grid lines to artboard only; VP handles can sit outside and stay visible. */}
+            <g clipPath="url(#canvas-guide-clip)" pointerEvents="none" aria-hidden>
+              <CanvasGuideOverlay
+                type={canvasGuideType}
+                w={project.width}
+                h={project.height}
+                spacing={canvasGuideSpacing}
+                opacity={canvasGuideOpacity}
+                strokeColor={canvasGuideColor}
+                vp1={canvasGuideVp1}
+                vpLeft={canvasGuideVpLeft}
+                vpRight={canvasGuideVpRight}
+                vpTop={canvasGuideVpTop}
+                fisheyeCenter={canvasGuideFisheyeCenter}
+              />
+            </g>
+            <g pointerEvents="auto" aria-hidden>
+              {canvasGuideType === 'perspective1' && (
+                <circle
+                  cx={canvasGuideVp1.nx * project.width}
+                  cy={canvasGuideVp1.ny * project.height}
+                  r={9}
+                  fill="var(--accent, #5b8def)"
+                  fillOpacity={0.85}
+                  stroke="#fff"
+                  strokeWidth={2}
+                  vectorEffect="non-scaling-stroke"
+                  onPointerDown={(ev) => {
+                    ev.stopPropagation()
+                    ev.preventDefault()
+                    guideVpDragRef.current = { kind: 'vp1', pointerId: ev.pointerId }
+                    ;(ev.currentTarget.ownerSVGElement as SVGSVGElement)?.setPointerCapture(ev.pointerId)
+                  }}
+                >
+                  <title>Drag vanishing point</title>
+                </circle>
+              )}
+              {canvasGuideType === 'perspective2' && (
+                <>
+                  <circle
+                    cx={canvasGuideVpLeft.nx * project.width}
+                    cy={canvasGuideVpLeft.ny * project.height}
+                    r={9}
+                    fill="#8b5cf6"
+                    fillOpacity={0.9}
+                    stroke="#fff"
+                    strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
+                    onPointerDown={(ev) => {
+                      ev.stopPropagation()
+                      ev.preventDefault()
+                      guideVpDragRef.current = { kind: 'vpL', pointerId: ev.pointerId }
+                      ;(ev.currentTarget.ownerSVGElement as SVGSVGElement)?.setPointerCapture(ev.pointerId)
+                    }}
+                  >
+                    <title>Drag left vanishing point</title>
+                  </circle>
+                  <circle
+                    cx={canvasGuideVpRight.nx * project.width}
+                    cy={canvasGuideVpRight.ny * project.height}
+                    r={9}
+                    fill="#06b6d4"
+                    fillOpacity={0.9}
+                    stroke="#fff"
+                    strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
+                    onPointerDown={(ev) => {
+                      ev.stopPropagation()
+                      ev.preventDefault()
+                      guideVpDragRef.current = { kind: 'vpR', pointerId: ev.pointerId }
+                      ;(ev.currentTarget.ownerSVGElement as SVGSVGElement)?.setPointerCapture(ev.pointerId)
+                    }}
+                  >
+                    <title>Drag right vanishing point</title>
+                  </circle>
+                </>
+              )}
+              {canvasGuideType === 'perspective3' && (
+                <>
+                  <circle
+                    cx={canvasGuideVpLeft.nx * project.width}
+                    cy={canvasGuideVpLeft.ny * project.height}
+                    r={9}
+                    fill="#8b5cf6"
+                    fillOpacity={0.9}
+                    stroke="#fff"
+                    strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
+                    onPointerDown={(ev) => {
+                      ev.stopPropagation()
+                      ev.preventDefault()
+                      guideVpDragRef.current = { kind: 'vpL', pointerId: ev.pointerId }
+                      ;(ev.currentTarget.ownerSVGElement as SVGSVGElement)?.setPointerCapture(ev.pointerId)
+                    }}
+                  >
+                    <title>Drag left vanishing point</title>
+                  </circle>
+                  <circle
+                    cx={canvasGuideVpRight.nx * project.width}
+                    cy={canvasGuideVpRight.ny * project.height}
+                    r={9}
+                    fill="#06b6d4"
+                    fillOpacity={0.9}
+                    stroke="#fff"
+                    strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
+                    onPointerDown={(ev) => {
+                      ev.stopPropagation()
+                      ev.preventDefault()
+                      guideVpDragRef.current = { kind: 'vpR', pointerId: ev.pointerId }
+                      ;(ev.currentTarget.ownerSVGElement as SVGSVGElement)?.setPointerCapture(ev.pointerId)
+                    }}
+                  >
+                    <title>Drag right vanishing point</title>
+                  </circle>
+                  <circle
+                    cx={canvasGuideVpTop.nx * project.width}
+                    cy={canvasGuideVpTop.ny * project.height}
+                    r={9}
+                    fill="#f59e0b"
+                    fillOpacity={0.9}
+                    stroke="#fff"
+                    strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
+                    onPointerDown={(ev) => {
+                      ev.stopPropagation()
+                      ev.preventDefault()
+                      guideVpDragRef.current = { kind: 'vpT', pointerId: ev.pointerId }
+                      ;(ev.currentTarget.ownerSVGElement as SVGSVGElement)?.setPointerCapture(ev.pointerId)
+                    }}
+                  >
+                    <title>Drag top vanishing point</title>
+                  </circle>
+                </>
+              )}
+              {canvasGuideType === 'fisheye' && (
+                <circle
+                  cx={canvasGuideFisheyeCenter.nx * project.width}
+                  cy={canvasGuideFisheyeCenter.ny * project.height}
+                  r={10}
+                  fill="#ec4899"
+                  fillOpacity={0.85}
+                  stroke="#fff"
+                  strokeWidth={2}
+                  vectorEffect="non-scaling-stroke"
+                  onPointerDown={(ev) => {
+                    ev.stopPropagation()
+                    ev.preventDefault()
+                    guideVpDragRef.current = { kind: 'fish', pointerId: ev.pointerId }
+                    ;(ev.currentTarget.ownerSVGElement as SVGSVGElement)?.setPointerCapture(ev.pointerId)
+                  }}
+                >
+                  <title>Drag fisheye center</title>
+                </circle>
+              )}
+            </g>
+          </>
+        )}
         <ElementRenderer
           elements={project.elements}
+          symbols={project.symbols}
           tracks={tracks}
           currentTime={currentTime}
           onElementPointerDown={onElementPointerDown}
@@ -1511,6 +1881,30 @@ export function Canvas() {
             ))}
           </g>
         )}
+        {pencilPreview && pencilPreview.length > 1 && (
+          <polyline
+            pointerEvents="none"
+            fill="none"
+            stroke={pencilSettings.color}
+            strokeWidth={pencilSettings.strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            opacity={0.85}
+            points={pencilPreview.map((q) => `${q.x},${q.y}`).join(' ')}
+          />
+        )}
+        {eraserPreview && eraserPreview.length > 1 && (
+          <polyline
+            pointerEvents="none"
+            fill="none"
+            stroke="rgba(239,68,68,0.55)"
+            strokeWidth={eraserSettings.width}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray="6 4"
+            points={eraserPreview.map((q) => `${q.x},${q.y}`).join(' ')}
+          />
+        )}
         {brushPreview && brushPreview.stamps.length > 0 && (
           <g pointerEvents="none" opacity={0.95}>
             {brushPreview.stamps.map((st, i) => (
@@ -1592,6 +1986,275 @@ export function Canvas() {
           </g>
         )}
       </svg>
+      {mode !== 'export' && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 12,
+            bottom: 12,
+            zIndex: 11,
+            pointerEvents: 'auto',
+            maxWidth: canvasGuidePanelCollapsed ? 200 : 288
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: canvasGuidePanelCollapsed ? 0 : 10,
+              background: 'var(--bg-panel)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: canvasGuidePanelCollapsed ? '8px 10px' : '10px 12px',
+              boxShadow: '0 6px 20px rgba(0,0,0,0.22)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                title={canvasGuidePanelCollapsed ? 'Expand guides panel' : 'Collapse panel'}
+                onClick={() => setCanvasGuidePanelCollapsed(!canvasGuidePanelCollapsed)}
+                style={{
+                  width: 32,
+                  height: 32,
+                  padding: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 6,
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-app)',
+                  color: 'var(--text)',
+                  cursor: 'pointer'
+                }}
+              >
+                <FontAwesomeIcon icon={canvasGuidePanelCollapsed ? faChevronRight : faChevronDown} />
+              </button>
+              <button
+                type="button"
+                title={canvasGuideOverlayVisible ? 'Hide grid overlay' : 'Show grid overlay'}
+                onClick={() => setCanvasGuideOverlayVisible(!canvasGuideOverlayVisible)}
+                style={{
+                  width: 32,
+                  height: 32,
+                  padding: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 6,
+                  border: '1px solid var(--border)',
+                  background: canvasGuideOverlayVisible ? 'var(--bg-app)' : 'var(--accent-muted, rgba(91,141,239,0.15))',
+                  color: 'var(--text)',
+                  cursor: 'pointer'
+                }}
+              >
+                <FontAwesomeIcon icon={canvasGuideOverlayVisible ? faEye : faEyeSlash} />
+              </button>
+              <label
+                title="Grid line color"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  marginLeft: 'auto',
+                  cursor: 'pointer'
+                }}
+              >
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Color</span>
+                <input
+                  type="color"
+                  value={canvasGuideColor.startsWith('#') ? canvasGuideColor : '#94a3b8'}
+                  onChange={(e) => setCanvasGuideColor(e.target.value)}
+                  style={{ width: 32, height: 28, padding: 0, border: '1px solid var(--border)', borderRadius: 6 }}
+                />
+              </label>
+            </div>
+
+            {!canvasGuidePanelCollapsed && (
+              <>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
+                  CANVAS GUIDES
+                </div>
+                <p style={{ margin: '-6px 0 0', fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.35 }}>
+                  Overlay only — not exported. Drag colored handles to move vanishing points / fisheye center.
+                </p>
+                <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                  Type
+                  <select
+                    value={canvasGuideType}
+                    onChange={(e) => setCanvasGuideType(e.target.value as CanvasGuideType)}
+                  >
+                    <option value="none">Off</option>
+                    <option value="square">Square grid</option>
+                    <option value="isometric">Isometric grid</option>
+                    <option value="perspective1">1-point perspective</option>
+                    <option value="perspective2">2-point perspective</option>
+                    <option value="perspective3">3-point perspective</option>
+                    <option value="fisheye">Fisheye grid</option>
+                  </select>
+                </label>
+                {canvasGuideType !== 'none' && (
+                  <>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Spacing
+                      <input
+                        type="range"
+                        min={8}
+                        max={120}
+                        step={2}
+                        value={canvasGuideSpacing}
+                        onChange={(e) => setCanvasGuideSpacing(Number(e.target.value))}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Opacity
+                      <input
+                        type="range"
+                        min={0.06}
+                        max={0.55}
+                        step={0.02}
+                        value={canvasGuideOpacity}
+                        onChange={(e) => setCanvasGuideOpacity(Number(e.target.value))}
+                      />
+                    </label>
+                    {(canvasGuideType === 'perspective1' ||
+                      canvasGuideType === 'perspective2' ||
+                      canvasGuideType === 'perspective3') && (
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Horizon line (syncs side VPs)
+                        <input
+                          type="range"
+                          min={0.08}
+                          max={0.92}
+                          step={0.01}
+                          value={canvasGuideHorizon}
+                          onChange={(e) => setCanvasGuideHorizon(Number(e.target.value))}
+                        />
+                      </label>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+      {mode === 'draw' && activeTool === 'pencil' && (
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: 12,
+            transform: 'translateX(-50%)',
+            zIndex: 11,
+            pointerEvents: 'auto'
+          }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, auto)',
+              gap: '10px 14px',
+              alignItems: 'center',
+              background: 'var(--bg-panel)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: '8px 10px',
+              boxShadow: '0 6px 20px rgba(0,0,0,0.25)'
+            }}
+          >
+            <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+              Smoothing
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.02}
+                value={pencilSettings.smoothing}
+                onChange={(e) =>
+                  setPencilSettings((s) => ({
+                    ...s,
+                    smoothing: Number(e.target.value)
+                  }))
+                }
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+              Stroke
+              <input
+                type="range"
+                min={0.5}
+                max={16}
+                step={0.5}
+                value={pencilSettings.strokeWidth}
+                onChange={(e) =>
+                  setPencilSettings((s) => ({
+                    ...s,
+                    strokeWidth: Number(e.target.value)
+                  }))
+                }
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+              Color
+              <input
+                type="color"
+                value={pencilSettings.color}
+                onChange={(e) =>
+                  setPencilSettings((s) => ({
+                    ...s,
+                    color: e.target.value
+                  }))
+                }
+                style={{ width: 44, height: 28, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
+              />
+            </label>
+          </div>
+        </div>
+      )}
+      {mode === 'draw' && activeTool === 'eraser' && (
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: 12,
+            transform: 'translateX(-50%)',
+            zIndex: 11,
+            pointerEvents: 'auto'
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              background: 'var(--bg-panel)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: '8px 10px',
+              boxShadow: '0 6px 20px rgba(0,0,0,0.25)'
+            }}
+          >
+            <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+              Width
+              <input
+                type="range"
+                min={4}
+                max={120}
+                step={2}
+                value={eraserSettings.width}
+                onChange={(e) =>
+                  setEraserSettings((s) => ({
+                    ...s,
+                    width: Number(e.target.value)
+                  }))
+                }
+              />
+            </label>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Drag on canvas to subtract areas.</span>
+          </div>
+        </div>
+      )}
       {mode === 'draw' && activeTool === 'brush' && (
         <div
           style={{

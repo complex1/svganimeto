@@ -1,6 +1,16 @@
 import { useEditorStore } from '@/store/editorStore'
+import { dialogAlert } from '@/store/dialogStore'
+
+function guardSymbolEditing(): boolean {
+  if (useEditorStore.getState().symbolEditBackup) {
+    void dialogAlert('Finish or cancel symbol editing first.')
+    return true
+  }
+  return false
+}
 
 export async function openProjectFile() {
+  if (guardSymbolEditing()) return
   const api = window.api
   if (!api?.openProject) return
   const res = await api.openProject()
@@ -10,12 +20,13 @@ export async function openProjectFile() {
 }
 
 export async function saveProjectFile() {
+  if (guardSymbolEditing()) return
   const api = window.api
   const json = useEditorStore.getState().serializeProject()
   const name = `${useEditorStore.getState().project.name || 'project'}.svgmotion`
   if (!api?.saveProject) {
     await navigator.clipboard.writeText(json)
-    alert('Copied project JSON (desktop save unavailable).')
+    await dialogAlert('Copied project JSON (desktop save unavailable).')
     return
   }
   const path = await api.saveProject(json, name)

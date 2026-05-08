@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useEditorStore } from '@/store/editorStore'
+import { dialogAlert } from '@/store/dialogStore'
 import { exportAnimatedSvg } from '@/engines/export/exportSvg'
 
 export function ExportDialog({ onClose }: { onClose: () => void }) {
@@ -20,11 +21,11 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     const api = window.api
     if (!api?.exportSvg) {
       await navigator.clipboard.writeText(svg)
-      alert('Copied to clipboard (desktop export unavailable).')
+      await dialogAlert('Copied to clipboard (desktop export unavailable).')
       return
     }
     const path = await api.exportSvg(svg, `${project.name || 'export'}.svg`)
-    if (path) alert(`Saved to ${path}`)
+    if (path) await dialogAlert(`Saved to ${path}`)
   }
 
   const copy = async () => {

@@ -1,18 +1,26 @@
 import type { CSSProperties } from 'react'
+import { nanoid } from 'nanoid'
 import { useEditorStore } from '@/store/editorStore'
 import { flattenForLayers } from '@/engines/document/tree'
 import { mergeTransformFromTracks } from '@/engines/animation/interpolate'
 import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
+import type { LinearGradientDef, RadialGradientDef } from '@/types/gradient'
 
 export function RightInspector() {
   const selectedIds = useEditorStore((s) => s.selectedIds)
-  const elements = useEditorStore((s) => s.project.elements)
+  const project = useEditorStore((s) => s.project)
+  const elements = project.elements
   const tracks = useEditorStore((s) => s.tracks)
   const currentTime = useEditorStore((s) => s.currentTime)
   const updateTransform = useEditorStore((s) => s.updateTransform)
   const pushHistory = useEditorStore((s) => s.pushHistory)
   const setElementAttrs = useEditorStore((s) => s.setElementAttrs)
+  const upsertGradient = useEditorStore((s) => s.upsertGradient)
+  const applyBooleanOperation = useEditorStore((s) => s.applyBooleanOperation)
   const mode = useEditorStore((s) => s.mode)
+  const symbolEditing = useEditorStore((s) => !!s.symbolEditBackup)
+  const beginSymbolEdit = useEditorStore((s) => s.beginSymbolEdit)
+  const detachSymbolInstance = useEditorStore((s) => s.detachSymbolInstance)
 
   const id = selectedIds[0]
   const el = id ? flattenForLayers(elements).find((x) => x.el.id === id)?.el : undefined
@@ -28,6 +36,23 @@ export function RightInspector() {
   const tr = mergeTransformFromTracks(el.transform, el.id, tracks, currentTime)
   const fillValue = typeof el.attrs.fill === 'string' ? el.attrs.fill : '#d1d5db'
   const fillNone = fillValue === 'none' || fillValue === 'transparent'
+  const fillUrlMatch =
+    typeof el.attrs.fill === 'string' ? /^url\(#([^)]+)\)$/.exec(el.attrs.fill) : null
+  const gradientRefId = fillUrlMatch?.[1]
+  const activeGradient = gradientRefId
+    ? project.gradients.find((g) => g.id === gradientRefId)
+    : undefined
+  const fillMode: 'none' | 'solid' | 'linear' | 'radial' = fillNone
+    ? 'none'
+    : activeGradient?.kind === 'linear'
+      ? 'linear'
+      : activeGradient?.kind === 'radial'
+        ? 'radial'
+        : 'solid'
+  const solidFillHex =
+    fillMode === 'solid' && typeof fillValue === 'string' && fillValue.startsWith('#')
+      ? fillValue
+      : '#d1d5db'
   const strokeValue = typeof el.attrs.stroke === 'string' ? el.attrs.stroke : '#5b8def'
   const strokeWidthValue =
     typeof el.attrs['stroke-width'] === 'number'
@@ -50,6 +75,90 @@ export function RightInspector() {
   const canCornerRadius = el.type === 'rect'
   const canTypography = el.type === 'text'
   const canAlign = selectedIds.length > 1 && mode === 'draw'
+  const isSymbolInstance = el.type === 'symbolInstance'
+  const symbolMaster =
+    isSymbolInstance && typeof el.attrs.__symbolId === 'string'
+      ? project.symbols.find((s) => s.id === el.attrs.__symbolId)
+      : undefined
+  const canFillGradient =
+    !isSymbolInstance &&
+    ['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'text'].includes(el.type)
+
+  const BOOLEAN_TYPES = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polygon', 'polyline'])
+  const canShapeBoolean =
+    mode === 'draw' &&
+    selectedIds.length >= 2 &&
+    selectedIds.every((sid) => {
+      const node = flattenForLayers(elements).find((x) => x.el.id === sid)?.el
+      return node ? BOOLEAN_TYPES.has(node.type) : false
+    })
+
+  const applyFillMode = (m: 'none' | 'solid' | 'linear' | 'radial') => {
+    if (el.locked || mode !== 'draw') return
+    if (m === 'none') {
+      setElementAttrs(el.id, { fill: 'none' })
+      return
+    }
+    if (m === 'solid') {
+      setElementAttrs(el.id, { fill: solidFillHex })
+      return
+    }
+    const base =
+      typeof el.attrs.fill === 'string' && el.attrs.fill.startsWith('#')
+        ? el.attrs.fill
+        : '#d1d5db'
+    const gid = `grad_${nanoid(8)}`
+    if (m === 'linear') {
+      const def: LinearGradientDef = {
+        id: gid,
+        kind: 'linear',
+        x1: 0,
+        y1: 0,
+        x2: project.width,
+        y2: 0,
+        gradientUnits: 'userSpaceOnUse',
+        stops: [
+          { offset: 0, color: base },
+          { offset: 1, color: '#5b8def' }
+        ]
+      }
+      upsertGradient(def)
+      setElementAttrs(el.id, { fill: `url(#${gid})` })
+      return
+    }
+    const defR: RadialGradientDef = {
+      id: gid,
+      kind: 'radial',
+      cx: project.width / 2,
+      cy: project.height / 2,
+      r: Math.min(project.width, project.height) / 2,
+      gradientUnits: 'userSpaceOnUse',
+      stops: [
+        { offset: 0, color: base },
+        { offset: 1, color: '#5b8def' }
+      ]
+    }
+    upsertGradient(defR)
+    setElementAttrs(el.id, { fill: `url(#${gid})` })
+  }
+
+  const patchGradientStop = (idx: number, patch: { color?: string; offset?: number }) => {
+    if (!activeGradient || el.locked) return
+    const stops = activeGradient.stops.map((s, i) =>
+      i === idx ? { ...s, ...patch } : s
+    )
+    upsertGradient({ ...activeGradient, stops })
+  }
+
+  const patchLinearAxes = (partial: Partial<Pick<LinearGradientDef, 'x1' | 'y1' | 'x2' | 'y2'>>) => {
+    if (activeGradient?.kind !== 'linear') return
+    upsertGradient({ ...activeGradient, ...partial })
+  }
+
+  const patchRadial = (partial: Partial<Pick<RadialGradientDef, 'cx' | 'cy' | 'r'>>) => {
+    if (activeGradient?.kind !== 'radial') return
+    upsertGradient({ ...activeGradient, ...partial })
+  }
 
   const sectionTitleStyle: CSSProperties = {
     fontSize: 11,
@@ -139,6 +248,49 @@ export function RightInspector() {
         {row('Scale Y', 'scaleY')}
         {row('Rotation', 'rotation')}
         {row('Opacity', 'opacity')}
+        {isSymbolInstance && (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>
+              Symbol instance
+              {symbolMaster ? (
+                <>
+                  : <strong>{symbolMaster.name}</strong>. Edits to the master apply to every instance.
+                </>
+              ) : (
+                <> (missing master)</>
+              )}
+            </p>
+            {symbolMaster && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={el.locked || symbolEditing || mode !== 'draw'}
+                  title={
+                    symbolEditing
+                      ? 'Finish symbol editing first'
+                      : 'Open symbol master on its own canvas'
+                  }
+                  onClick={() => beginSymbolEdit(symbolMaster.id)}
+                >
+                  Edit symbol…
+                </button>
+                <button
+                  type="button"
+                  disabled={el.locked || symbolEditing || mode !== 'draw'}
+                  title={
+                    symbolEditing
+                      ? 'Finish symbol editing first'
+                      : 'Turn into normal group (no longer linked)'
+                  }
+                  onClick={() => detachSymbolInstance(el.id)}
+                >
+                  Detach instance
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {canCornerRadius && (
           <>
             <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
@@ -176,61 +328,146 @@ export function RightInspector() {
           </>
         )}
 
-        <div style={sectionTitleStyle}>Fill</div>
-        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ color: 'var(--text-muted)' }}>Style</span>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <input
-              type="checkbox"
-              checked={fillNone}
+        {!isSymbolInstance && <div style={sectionTitleStyle}>Fill</div>}
+        {canFillGradient && (
+          <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ color: 'var(--text-muted)' }}>Fill</span>
+            <select
+              value={fillMode}
               disabled={el.locked || mode !== 'draw'}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  setElementAttrs(el.id, { fill: 'none' })
-                } else {
-                  setElementAttrs(el.id, { fill: '#d1d5db' })
-                }
-              }}
-            />
-            No Fill
+              onChange={(e) => applyFillMode(e.target.value as 'none' | 'solid' | 'linear' | 'radial')}
+            >
+              <option value="none">No fill</option>
+              <option value="solid">Solid</option>
+              <option value="linear">Linear gradient</option>
+              <option value="radial">Radial gradient</option>
+            </select>
           </label>
-        </label>
-        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
-          <span style={{ color: 'var(--text-muted)' }}>Color</span>
-          <input
-            type="color"
-            value={fillValue.startsWith('#') ? fillValue : '#d1d5db'}
-            disabled={el.locked || mode !== 'draw' || fillNone}
-            onChange={(e) => setElementAttrs(el.id, { fill: e.target.value })}
-            style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
-          />
-        </label>
+        )}
+        {fillMode === 'solid' && (
+          <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Color</span>
+            <input
+              type="color"
+              value={solidFillHex}
+              disabled={el.locked || mode !== 'draw'}
+              onChange={(e) => setElementAttrs(el.id, { fill: e.target.value })}
+              style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
+            />
+          </label>
+        )}
+        {!canFillGradient && !isSymbolInstance && (
+          <>
+            <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ color: 'var(--text-muted)' }}>Style</span>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={fillNone}
+                  disabled={el.locked || mode !== 'draw'}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setElementAttrs(el.id, { fill: 'none' })
+                    } else {
+                      setElementAttrs(el.id, { fill: '#d1d5db' })
+                    }
+                  }}
+                />
+                No Fill
+              </label>
+            </label>
+            <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Color</span>
+              <input
+                type="color"
+                value={fillValue.startsWith('#') ? fillValue : '#d1d5db'}
+                disabled={el.locked || mode !== 'draw' || fillNone}
+                onChange={(e) => setElementAttrs(el.id, { fill: e.target.value })}
+                style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
+              />
+            </label>
+          </>
+        )}
+        {(fillMode === 'linear' || fillMode === 'radial') && activeGradient && (
+          <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Gradient stops</span>
+            {activeGradient.stops.slice(0, 2).map((s, idx) => (
+              <label key={`stop-${idx}`} style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-muted)' }}>{idx === 0 ? 'Start' : 'End'}</span>
+                <input
+                  type="color"
+                  value={s.color.startsWith('#') ? s.color : '#888888'}
+                  disabled={el.locked || mode !== 'draw'}
+                  onChange={(e) => patchGradientStop(idx, { color: e.target.value })}
+                  style={{ width: '100%', height: 28, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
+                />
+              </label>
+            ))}
+            {activeGradient.kind === 'linear' && (
+              <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-muted)' }}>X₂</span>
+                <input
+                  type="number"
+                  step={1}
+                  value={activeGradient.x2}
+                  disabled={el.locked || mode !== 'draw'}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    if (Number.isFinite(v)) patchLinearAxes({ x2: v })
+                  }}
+                />
+              </label>
+            )}
+            {activeGradient.kind === 'radial' && (
+              <>
+                <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Radius</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={activeGradient.r}
+                    disabled={el.locked || mode !== 'draw'}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (Number.isFinite(v)) patchRadial({ r: Math.max(1, v) })
+                    }}
+                  />
+                </label>
+              </>
+            )}
+          </div>
+        )}
 
-        <div style={sectionTitleStyle}>Stroke</div>
-        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ color: 'var(--text-muted)' }}>Color</span>
-          <input
-            type="color"
-            value={strokeValue.startsWith('#') ? strokeValue : '#5b8def'}
-            disabled={el.locked || mode !== 'draw'}
-            onChange={(e) => setElementAttrs(el.id, { stroke: e.target.value })}
-            style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
-          />
-        </label>
-        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
-          <span style={{ color: 'var(--text-muted)' }}>Width</span>
-          <input
-            type="number"
-            min={0}
-            step={0.5}
-            value={Number.isFinite(strokeWidthValue) ? strokeWidthValue : 2}
-            disabled={el.locked || mode !== 'draw'}
-            onChange={(e) => {
-              const v = Number(e.target.value)
-              if (Number.isFinite(v)) setElementAttrs(el.id, { 'stroke-width': Math.max(0, v) })
-            }}
-          />
-        </label>
+        {!isSymbolInstance && (
+          <>
+            <div style={sectionTitleStyle}>Stroke</div>
+            <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ color: 'var(--text-muted)' }}>Color</span>
+              <input
+                type="color"
+                value={strokeValue.startsWith('#') ? strokeValue : '#5b8def'}
+                disabled={el.locked || mode !== 'draw'}
+                onChange={(e) => setElementAttrs(el.id, { stroke: e.target.value })}
+                style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Width</span>
+              <input
+                type="number"
+                min={0}
+                step={0.5}
+                value={Number.isFinite(strokeWidthValue) ? strokeWidthValue : 2}
+                disabled={el.locked || mode !== 'draw'}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  if (Number.isFinite(v)) setElementAttrs(el.id, { 'stroke-width': Math.max(0, v) })
+                }}
+              />
+            </label>
+          </>
+        )}
 
         <div style={sectionTitleStyle}>Typography</div>
         {!canTypography ? (
@@ -298,12 +535,43 @@ export function RightInspector() {
           <button type="button" disabled={!canAlign} title="Align Bottom" onClick={() => alignSelected('y', 'end')}>Bottom</button>
         </div>
 
-        <div style={sectionTitleStyle}>Boolean operations</div>
+        <div style={sectionTitleStyle}>Shape builder</div>
+        <p style={{ margin: '0 0 8px', color: 'var(--text-muted)', fontSize: 12 }}>
+          Select two or more overlapping paths or shapes with the same parent. Subtract uses the first selected layer as the base.
+        </p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
-          <button type="button" disabled title="Union">Union</button>
-          <button type="button" disabled title="Subtract">Subtract</button>
-          <button type="button" disabled title="Intersect">Intersect</button>
-          <button type="button" disabled title="Exclude">Exclude</button>
+          <button
+            type="button"
+            disabled={!canShapeBoolean}
+            title="Union — merge into one path"
+            onClick={() => applyBooleanOperation('union')}
+          >
+            Merge
+          </button>
+          <button
+            type="button"
+            disabled={!canShapeBoolean}
+            title="Subtract others from first selected"
+            onClick={() => applyBooleanOperation('subtract')}
+          >
+            Subtract
+          </button>
+          <button
+            type="button"
+            disabled={!canShapeBoolean}
+            title="Intersect all selections"
+            onClick={() => applyBooleanOperation('intersect')}
+          >
+            Intersect
+          </button>
+          <button
+            type="button"
+            disabled={!canShapeBoolean}
+            title="Symmetric difference"
+            onClick={() => applyBooleanOperation('xor')}
+          >
+            Exclude
+          </button>
         </div>
       </div>
     </aside>

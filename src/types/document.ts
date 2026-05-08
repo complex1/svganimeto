@@ -9,6 +9,8 @@ export type VectorElementType =
   | 'image'
   | 'polygon'
   | 'polyline'
+  /** Reference to `project.symbols[].template`; rendered as a clone of the master. */
+  | 'symbolInstance'
 
 export type PathPointMode = 'corner' | 'symmetric' | 'asymmetric' | 'disconnected'
 
@@ -60,8 +62,16 @@ export type VectorElement = {
 export type Asset = {
   id: string
   name: string
-  kind: 'icon' | 'gradient' | 'preset' | 'other'
+  kind: 'icon' | 'gradient' | 'preset' | 'symbol' | 'other'
   data?: unknown
+}
+
+/** Reusable component master (single root element tree). */
+export type SymbolDefinition = {
+  id: string
+  name: string
+  /** Root group or shape; transforms at root are relative to each instance. */
+  template: VectorElement
 }
 
 export type Project = {
@@ -71,6 +81,8 @@ export type Project = {
   height: number
   elements: VectorElement[]
   assets: Asset[]
+  gradients: import('./gradient').GradientDef[]
+  symbols: SymbolDefinition[]
 }
 
 export type SerializedProject = Project & {

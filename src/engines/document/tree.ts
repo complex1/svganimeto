@@ -131,3 +131,49 @@ export function reorderSiblings(
   if (parentId === null) return list
   return mapElements(roots, (el) => (el.id === parentId ? { ...el, children: list } : el))
 }
+
+/** Chain from root to target (inclusive), for accumulating SVG transforms. */
+export function findAncestorChain(roots: VectorElement[], id: string): VectorElement[] | null {
+  function walk(nodes: VectorElement[], stack: VectorElement[]): VectorElement[] | null {
+    for (const n of nodes) {
+      if (n.id === id) return [...stack, n]
+      if (n.children?.length) {
+        const hit = walk(n.children, [...stack, n])
+        if (hit) return hit
+      }
+    }
+    return null
+  }
+  return walk(roots, [])
+}
+
+/** Remove elements matching ids anywhere in the tree (does not remove empty groups). */
+export function purgeElementsByIds(roots: VectorElement[], ids: Set<string>): VectorElement[] {
+  return roots
+    .filter((el) => !ids.has(el.id))
+    .map((el) =>
+      el.children?.length ? { ...el, children: purgeElementsByIds(el.children, ids) } : el
+    )
+}
+
+/** Remove all symbol instances that reference a deleted master; returns removed instance ids (for track cleanup). */
+export function stripSymbolInstancesByMasterId(
+  roots: VectorElement[],
+  symbolId: string
+): { roots: VectorElement[]; removedIds: string[] } {
+  const removedIds: string[] = []
+  const walk = (list: VectorElement[]): VectorElement[] => {
+    return list
+      .filter((el) => {
+        if (el.type === 'symbolInstance' && String(el.attrs.__symbolId ?? '') === symbolId) {
+          removedIds.push(el.id)
+          return false
+        }
+        return true
+      })
+      .map((el) =>
+        el.children?.length ? { ...el, children: walk(el.children) } : el
+      )
+  }
+  return { roots: walk(roots), removedIds }
+}

@@ -17,6 +17,7 @@ export function TopBar() {
   const mode = useEditorStore((s) => s.mode)
   const setMode = useEditorStore((s) => s.setMode)
   const projectName = useEditorStore((s) => s.project.name)
+  const symbolEditing = useEditorStore((s) => !!s.symbolEditBackup)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const hasElectronImport = typeof window.api?.importSvg === 'function'
@@ -37,6 +38,8 @@ export function TopBar() {
           <button
             key={m.id}
             type="button"
+            disabled={symbolEditing}
+            title={symbolEditing ? 'Finish symbol editing first' : undefined}
             className={clsx(mode === m.id && 'active')}
             onClick={() => setMode(m.id)}
           >
@@ -54,12 +57,16 @@ export function TopBar() {
         />
         <button
           type="button"
+          disabled={symbolEditing}
           title={
-            hasElectronImport
-              ? 'Import SVG (native dialog)'
-              : 'Import SVG from disk (browser)'
+            symbolEditing
+              ? 'Finish symbol editing first'
+              : hasElectronImport
+                ? 'Import SVG (native dialog)'
+                : 'Import SVG from disk (browser)'
           }
           onClick={() => {
+            if (symbolEditing) return
             if (hasElectronImport) void importSvgFile()
             else fileInputRef.current?.click()
           }}

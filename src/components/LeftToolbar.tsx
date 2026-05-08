@@ -3,10 +3,13 @@ import {
   faArrowPointer,
   faBezierCurve,
   faCircle,
+  faEraser,
   faFont,
   faMinus,
+  faObjectGroup,
   faPaintbrush,
   faPenNib,
+  faPencil,
   faSquare
 } from '@fortawesome/free-solid-svg-icons'
 import { useEditorStore, type DrawTool } from '@/store/editorStore'
@@ -18,13 +21,16 @@ export function LeftToolbar() {
 
   const tools: { id: DrawTool; label: string; icon: typeof faArrowPointer }[] = [
     { id: 'select', label: 'Select (V)', icon: faArrowPointer },
+    { id: 'shape-builder', label: 'Shape builder (G)', icon: faObjectGroup },
     { id: 'rect', label: 'Rectangle (R)', icon: faSquare },
     { id: 'circle', label: 'Circle (O)', icon: faCircle },
     { id: 'ellipse', label: 'Ellipse (E)', icon: faCircle },
     { id: 'line', label: 'Line (L)', icon: faMinus },
     { id: 'pen', label: 'Pen (P)', icon: faPenNib },
+    { id: 'pencil', label: 'Pencil (I)', icon: faPencil },
     { id: 'path-edit', label: 'Path Edit (N)', icon: faBezierCurve },
     { id: 'brush', label: 'Brush (B)', icon: faPaintbrush },
+    { id: 'eraser', label: 'Eraser (X)', icon: faEraser },
     { id: 'text', label: 'Text (T)', icon: faFont }
   ]
 

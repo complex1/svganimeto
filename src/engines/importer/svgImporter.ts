@@ -180,7 +180,9 @@ export function importSvgString(svgString: string, projectName = 'Imported'): Pr
       width: 800,
       height: 600,
       elements: [],
-      assets: []
+      assets: [],
+      gradients: [],
+      symbols: []
     }
   }
   const { width, height } = parseSize(svg)
@@ -191,6 +193,8 @@ export function importSvgString(svgString: string, projectName = 'Imported'): Pr
     width,
     height,
     elements,
-    assets: []
+    assets: [],
+    gradients: [],
+    symbols: []
   }
 }

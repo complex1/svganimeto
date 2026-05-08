@@ -1,29 +1,62 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
-import type { Project, Transform, VectorAttrValue, VectorElement } from '@/types/document'
+import {
+  defaultTransform,
+  type Project,
+  type SymbolDefinition,
+  type Transform,
+  type VectorAttrValue,
+  type VectorElement
+} from '@/types/document'
+import type { GradientDef } from '@/types/gradient'
 import type { AnimatableProperty, AnimationTrack, EasingId, Keyframe } from '@/types/animation'
 import { importSvgString } from '@/engines/importer/svgImporter'
 import {
+  findAncestorChain,
+  findElement,
   flattenForLayers,
+  insertElement,
+  purgeElementsByIds,
   removeElementById,
   reorderSiblings,
+  stripSymbolInstancesByMasterId,
   updateElementById
 } from '@/engines/document/tree'
+import type { MultiPolygon } from 'polygon-clipping'
+import { difference, intersection, union, xor } from '@/engines/geometry/polygonClippingApi'
+import type { BooleanOpKind } from '@/engines/geometry/pathBooleanEngine'
+import {
+  elementToWorldMultiPolygon,
+  multiPolygonToPathD
+} from '@/engines/geometry/pathBooleanEngine'
+import { multiplyWorldMatrices } from '@/engines/geometry/svgWorldTransform'
+import { applyEraserClipToTree } from '@/engines/geometry/eraserApply'
+import { strokeOutlineRing } from '@/engines/geometry/pathFlatten'
 import type { HistorySnapshot } from '@/types/history'
+import { dialogAlert, dialogConfirm } from '@/store/dialogStore'
+import { deepCloneElementNewIds, unlockElementTree } from '@/engines/document/symbolClone'
+import type { CanvasGuideType, GuidePointNorm } from '@/types/canvasGuide'
 
 export type EditorMode = 'draw' | 'animate' | 'preview' | 'export'
 export type DrawTool =
   | 'select'
+  | 'shape-builder'
   | 'rect'
   | 'circle'
   | 'ellipse'
   | 'line'
   | 'pen'
+  | 'pencil'
   | 'path-edit'
   | 'brush'
+  | 'eraser'
   | 'text'
 
 const HISTORY_MAX = 80
+
+function clampGuideCoord(v: number) {
+  return Math.max(-5, Math.min(5, v))
+}
 
 const emptyProject = (): Project => ({
   id: nanoid(),
@@ -31,8 +64,52 @@ const emptyProject = (): Project => ({
   width: 800,
   height: 600,
   elements: [],
-  assets: []
+  assets: [],
+  gradients: [],
+  symbols: []
 })
+
+/** Selection must be root-level layers only (not nested, not symbol instances). */
+/** Saved document/editor slice while editing a symbol master on an isolated canvas. */
+export type SymbolEditRestoreSnapshot = {
+  project: Project
+  projectPath: string | null
+  tracks: AnimationTrack[]
+  selectedIds: string[]
+  viewBox: { x: number; y: number; width: number; height: number }
+  zoom: number
+  mode: EditorMode
+  activeTool: DrawTool
+  historyPast: HistorySnapshot[]
+  historyFuture: HistorySnapshot[]
+  currentTime: number
+  duration: number
+  fps: number
+  loop: boolean
+  autoKeyframe: boolean
+  isPlaying: boolean
+}
+
+export type SymbolEditBackup = {
+  symbolId: string
+  symbolName: string
+  restore: SymbolEditRestoreSnapshot
+}
+
+function collectRootSelectionsForSymbol(
+  roots: VectorElement[],
+  ids: string[]
+): VectorElement[] | null {
+  if (ids.length === 0) return null
+  const out: VectorElement[] = []
+  for (const id of ids) {
+    const loc = findElement(roots, id)
+    if (!loc || loc.parent !== null) return null
+    if (loc.node.type === 'symbolInstance') return null
+    out.push(loc.node)
+  }
+  return out
+}
 
 type EditorState = {
   project: Project
@@ -51,8 +128,28 @@ type EditorState = {
   viewBox: { x: number; y: number; width: number; height: number }
   zoom: number
 
+  /** View-only construction guides (not exported). */
+  canvasGuideType: CanvasGuideType
+  canvasGuideSpacing: number
+  canvasGuideOpacity: number
+  canvasGuideColor: string
+  /** Show guide lines (eye toggle). */
+  canvasGuideOverlayVisible: boolean
+  /** Collapse the guides control panel to a compact bar. */
+  canvasGuidePanelCollapsed: boolean
+  /** Horizon helper — synced with VP vertical position when adjusted via slider. */
+  canvasGuideHorizon: number
+  canvasGuideVp1: GuidePointNorm
+  canvasGuideVpLeft: GuidePointNorm
+  canvasGuideVpRight: GuidePointNorm
+  canvasGuideVpTop: GuidePointNorm
+  canvasGuideFisheyeCenter: GuidePointNorm
+
   historyPast: HistorySnapshot[]
   historyFuture: HistorySnapshot[]
+
+  /** When set, the editor canvas shows only this symbol's master for isolated editing. */
+  symbolEditBackup: SymbolEditBackup | null
 
   pushHistory: () => void
   undo: () => void
@@ -75,6 +172,19 @@ type EditorState = {
   setViewBox: (vb: { x: number; y: number; width: number; height: number }) => void
   setZoom: (z: number) => void
   panBy: (dx: number, dy: number) => void
+
+  setCanvasGuideType: (t: CanvasGuideType) => void
+  setCanvasGuideSpacing: (n: number) => void
+  setCanvasGuideOpacity: (n: number) => void
+  setCanvasGuideColor: (c: string) => void
+  setCanvasGuideOverlayVisible: (v: boolean) => void
+  setCanvasGuidePanelCollapsed: (v: boolean) => void
+  setCanvasGuideHorizon: (n: number) => void
+  setCanvasGuideVp1: (p: Partial<GuidePointNorm>) => void
+  setCanvasGuideVpLeft: (p: Partial<GuidePointNorm>) => void
+  setCanvasGuideVpRight: (p: Partial<GuidePointNorm>) => void
+  setCanvasGuideVpTop: (p: Partial<GuidePointNorm>) => void
+  setCanvasGuideFisheyeCenter: (p: Partial<GuidePointNorm>) => void
 
   setCurrentTime: (t: number) => void
   setDuration: (d: number) => void
@@ -110,6 +220,19 @@ type EditorState = {
   setTracks: (tracks: AnimationTrack[], opts?: { skipHistory?: boolean }) => void
   pruneTracksForElement: (elementId: string, opts?: { skipHistory?: boolean }) => void
 
+  upsertGradient: (g: GradientDef, opts?: { skipHistory?: boolean }) => void
+  applyBooleanOperation: (op: BooleanOpKind) => void
+  applyEraserStroke: (samples: Array<{ x: number; y: number }>, width: number) => void
+
+  createSymbolFromSelection: (name?: string) => void
+  updateSymbolTemplateFromSelection: (symbolId: string) => void
+  deleteSymbol: (symbolId: string) => void
+  placeSymbolInstance: (symbolId: string) => void
+  beginSymbolEdit: (symbolId: string) => void
+  commitSymbolEdit: () => void
+  cancelSymbolEdit: () => void
+  detachSymbolInstance: (instanceId: string) => void
+
   serializeProject: () => string
   hydrateFromJson: (json: string) => void
 }
@@ -117,13 +240,20 @@ type EditorState = {
 function captureHistory(state: EditorState): HistorySnapshot {
   return {
     elements: structuredClone(state.project.elements),
-    tracks: structuredClone(state.tracks)
+    tracks: structuredClone(state.tracks),
+    gradients: structuredClone(state.project.gradients),
+    symbols: structuredClone(state.project.symbols)
   }
 }
 
 function applyHistory(state: EditorState, snap: HistorySnapshot): Partial<EditorState> {
   return {
-    project: { ...state.project, elements: snap.elements },
+    project: {
+      ...state.project,
+      elements: snap.elements,
+      gradients: snap.gradients,
+      symbols: snap.symbols
+    },
     tracks: snap.tracks
   }
 }
@@ -191,8 +321,23 @@ export const useEditorStore = create<EditorState>((set, get) => {
     viewBox: { x: 0, y: 0, width: 800, height: 600 },
     zoom: 1,
 
+    canvasGuideType: 'none',
+    canvasGuideSpacing: 40,
+    canvasGuideOpacity: 0.28,
+    canvasGuideColor: '#94a3b8',
+    canvasGuideOverlayVisible: true,
+    canvasGuidePanelCollapsed: false,
+    canvasGuideHorizon: 0.52,
+    canvasGuideVp1: { nx: 0.5, ny: 0.52 },
+    canvasGuideVpLeft: { nx: -0.35, ny: 0.52 },
+    canvasGuideVpRight: { nx: 1.35, ny: 0.52 },
+    canvasGuideVpTop: { nx: 0.5, ny: -0.45 },
+    canvasGuideFisheyeCenter: { nx: 0.5, ny: 0.5 },
+
     historyPast: [],
     historyFuture: [],
+
+    symbolEditBackup: null,
 
     pushHistory: () => {
       const snap = captureHistory(get())
@@ -229,6 +374,10 @@ export const useEditorStore = create<EditorState>((set, get) => {
     clearHistory: () => set({ historyPast: [], historyFuture: [] }),
 
     newProject: () => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish or cancel symbol editing before starting a new project.')
+        return
+      }
       const p = emptyProject()
       set({
         project: p,
@@ -244,8 +393,16 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
 
     setProject: (p, path = null) => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish or cancel symbol editing before loading a project.')
+        return
+      }
       set({
-        project: p,
+        project: {
+          ...p,
+          gradients: p.gradients ?? [],
+          symbols: p.symbols ?? []
+        },
         projectPath: path ?? null,
         viewBox: { x: 0, y: 0, width: p.width, height: p.height },
         historyPast: [],
@@ -254,6 +411,10 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
 
     importSvgFromString: (svg, name) => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish or cancel symbol editing before importing SVG.')
+        return
+      }
       const p = importSvgString(svg, name ?? 'Imported')
       withHistory(() => ({
         project: p,
@@ -295,6 +456,63 @@ export const useEditorStore = create<EditorState>((set, get) => {
           ...s.viewBox,
           x: s.viewBox.x - dx / s.zoom,
           y: s.viewBox.y - dy / s.zoom
+        }
+      })),
+
+    setCanvasGuideType: (t) => set({ canvasGuideType: t }),
+    setCanvasGuideSpacing: (n) => set({ canvasGuideSpacing: Math.max(8, Math.min(200, n)) }),
+    setCanvasGuideOpacity: (n) => set({ canvasGuideOpacity: Math.max(0.06, Math.min(0.55, n)) }),
+    setCanvasGuideColor: (c) => set({ canvasGuideColor: c }),
+    setCanvasGuideOverlayVisible: (v) => set({ canvasGuideOverlayVisible: v }),
+    setCanvasGuidePanelCollapsed: (v) => set({ canvasGuidePanelCollapsed: v }),
+    setCanvasGuideHorizon: (n) => {
+      const ny = Math.max(0.08, Math.min(0.92, n))
+      set((s) => ({
+        canvasGuideHorizon: ny,
+        canvasGuideVp1: { ...s.canvasGuideVp1, ny },
+        canvasGuideVpLeft: { ...s.canvasGuideVpLeft, ny },
+        canvasGuideVpRight: { ...s.canvasGuideVpRight, ny }
+      }))
+    },
+    setCanvasGuideVp1: (p) =>
+      set((s) => ({
+        canvasGuideVp1: {
+          nx: p.nx !== undefined ? clampGuideCoord(p.nx) : s.canvasGuideVp1.nx,
+          ny: p.ny !== undefined ? clampGuideCoord(p.ny) : s.canvasGuideVp1.ny
+        }
+      })),
+    setCanvasGuideVpLeft: (p) =>
+      set((s) => {
+        const nx = p.nx !== undefined ? clampGuideCoord(p.nx) : s.canvasGuideVpLeft.nx
+        const ny = p.ny !== undefined ? clampGuideCoord(p.ny) : s.canvasGuideVpLeft.ny
+        const syncNy = p.ny !== undefined
+        return {
+          canvasGuideVpLeft: { nx, ny },
+          canvasGuideVpRight: syncNy ? { ...s.canvasGuideVpRight, ny } : s.canvasGuideVpRight
+        }
+      }),
+    setCanvasGuideVpRight: (p) =>
+      set((s) => {
+        const nx = p.nx !== undefined ? clampGuideCoord(p.nx) : s.canvasGuideVpRight.nx
+        const ny = p.ny !== undefined ? clampGuideCoord(p.ny) : s.canvasGuideVpRight.ny
+        const syncNy = p.ny !== undefined
+        return {
+          canvasGuideVpRight: { nx, ny },
+          canvasGuideVpLeft: syncNy ? { ...s.canvasGuideVpLeft, ny } : s.canvasGuideVpLeft
+        }
+      }),
+    setCanvasGuideVpTop: (p) =>
+      set((s) => ({
+        canvasGuideVpTop: {
+          nx: p.nx !== undefined ? clampGuideCoord(p.nx) : s.canvasGuideVpTop.nx,
+          ny: p.ny !== undefined ? clampGuideCoord(p.ny) : s.canvasGuideVpTop.ny
+        }
+      })),
+    setCanvasGuideFisheyeCenter: (p) =>
+      set((s) => ({
+        canvasGuideFisheyeCenter: {
+          nx: p.nx !== undefined ? clampGuideCoord(p.nx) : s.canvasGuideFisheyeCenter.nx,
+          ny: p.ny !== undefined ? clampGuideCoord(p.ny) : s.canvasGuideFisheyeCenter.ny
         }
       })),
 
@@ -549,6 +767,434 @@ export const useEditorStore = create<EditorState>((set, get) => {
         opts
       ),
 
+    upsertGradient: (g, opts) =>
+      withHistory(
+        (s) => ({
+          project: {
+            ...s.project,
+            gradients: [...s.project.gradients.filter((x) => x.id !== g.id), g]
+          }
+        }),
+        opts
+      ),
+
+    applyBooleanOperation: (op) => {
+      const BOOLEAN_TYPES = new Set([
+        'path',
+        'rect',
+        'circle',
+        'ellipse',
+        'line',
+        'polygon',
+        'polyline'
+      ])
+      const s0 = get()
+      const ids = s0.selectedIds
+      if (ids.length < 2) return
+      const locs = ids
+        .map((id) => findElement(s0.project.elements, id))
+        .filter((x): x is NonNullable<typeof x> => Boolean(x))
+      if (locs.length !== ids.length) return
+      if (!locs.every((l) => BOOLEAN_TYPES.has(l.node.type))) {
+        void dialogAlert('Boolean operations work on paths and basic shapes only.')
+        return
+      }
+      const parentKey = (l: (typeof locs)[number]) => l.parent?.id ?? '__root__'
+      const headLoc = locs[0]
+      if (!headLoc) return
+      const pk = parentKey(headLoc)
+      if (!locs.every((l) => parentKey(l) === pk)) {
+        void dialogAlert('Select shapes that share the same parent layer.')
+        return
+      }
+
+      const mps: MultiPolygon[] = []
+      for (const loc of locs) {
+        const chain = findAncestorChain(s0.project.elements, loc.node.id)
+        if (!chain) return
+        const world = multiplyWorldMatrices(chain.map((n) => n.transform))
+        const mp = elementToWorldMultiPolygon(loc.node, world)
+        if (!mp?.length) {
+          void dialogAlert('Could not build geometry for one of the selected shapes.')
+          return
+        }
+        mps.push(mp)
+      }
+
+      if (mps.length < 2) return
+
+      let result: MultiPolygon
+      try {
+        if (op === 'union') {
+          let acc = mps[0]!
+          for (let i = 1; i < mps.length; i++) acc = union(acc, mps[i]!)
+          result = acc
+        } else if (op === 'intersect') {
+          let acc = mps[0]!
+          for (let i = 1; i < mps.length; i++) acc = intersection(acc, mps[i]!)
+          result = acc
+        } else if (op === 'xor') {
+          let acc = mps[0]!
+          for (let i = 1; i < mps.length; i++) acc = xor(acc, mps[i]!)
+          result = acc
+        } else {
+          const [first, ...rest] = mps
+          if (rest.length === 0) result = first!
+          else {
+            let clip = rest[0]!
+            for (let i = 1; i < rest.length; i++) clip = union(clip, rest[i]!)
+            result = difference(first!, clip)
+          }
+        }
+      } catch {
+        void dialogAlert('Boolean operation failed (try simplifying paths).')
+        return
+      }
+
+      const newD = multiPolygonToPathD(result)
+      if (!newD) {
+        void dialogAlert('Boolean result was empty.')
+        return
+      }
+
+      const parentId = headLoc.parent?.id ?? null
+      const insertIndex = Math.min(...locs.map((l) => l.index))
+      const removeSet = new Set(ids)
+
+      const newEl: VectorElement = {
+        id: nanoid(10),
+        name: `Merged ${s0.project.elements.length + 1}`,
+        type: 'path',
+        attrs: {
+          d: newD,
+          fill: '#d1d5db',
+          stroke: '#5b8def',
+          'stroke-width': 2,
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          'fill-rule': 'evenodd'
+        },
+        transform: defaultTransform(),
+        visible: true,
+        locked: false
+      }
+
+      let next = purgeElementsByIds(s0.project.elements, removeSet)
+      next = insertElement(next, parentId, insertIndex, newEl)
+      const nextTracks = s0.tracks.filter((t) => !removeSet.has(t.elementId))
+
+      withHistory(() => ({
+        project: { ...s0.project, elements: next },
+        tracks: nextTracks,
+        selectedIds: [newEl.id]
+      }))
+    },
+
+    applyEraserStroke: (samples, width) => {
+      if (samples.length < 2 || width <= 0) return
+      const ring = strokeOutlineRing(samples, width)
+      if (!ring) return
+      const clip: MultiPolygon = [[ring]]
+      withHistory((s) => ({
+        project: {
+          ...s.project,
+          elements: applyEraserClipToTree(s.project.elements, clip)
+        }
+      }))
+    },
+
+    createSymbolFromSelection: (name) => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish symbol editing before changing symbols on the main document.')
+        return
+      }
+      const s0 = get()
+      const roots = collectRootSelectionsForSymbol(s0.project.elements, s0.selectedIds)
+      if (!roots) {
+        void dialogAlert('Select one or more top-level layers (not nested groups, not symbol instances).')
+        return
+      }
+      let template: VectorElement
+      if (roots.length === 1) {
+        template = deepCloneElementNewIds(roots[0]!)
+      } else {
+        template = {
+          id: nanoid(10),
+          name: name ?? 'Symbol',
+          type: 'group',
+          attrs: {},
+          transform: defaultTransform(),
+          visible: true,
+          locked: false,
+          children: roots.map((r) => deepCloneElementNewIds(r))
+        }
+      }
+      const symName = name ?? roots[0]?.name ?? 'Symbol'
+      const sym: SymbolDefinition = { id: nanoid(8), name: symName, template }
+      const removeIds = new Set(roots.map((r) => r.id))
+      withHistory((s) => {
+        const nextElements = s.project.elements.filter((e) => !removeIds.has(e.id))
+        const nextTracks = s.tracks.filter((t) => !removeIds.has(t.elementId))
+        return {
+          project: {
+            ...s.project,
+            elements: nextElements,
+            symbols: [...s.project.symbols, sym]
+          },
+          tracks: nextTracks,
+          selectedIds: []
+        }
+      })
+    },
+
+    updateSymbolTemplateFromSelection: (symbolId) => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish symbol editing before changing symbols on the main document.')
+        return
+      }
+      const s0 = get()
+      if (!s0.project.symbols.some((x) => x.id === symbolId)) return
+      const roots = collectRootSelectionsForSymbol(s0.project.elements, s0.selectedIds)
+      if (!roots) {
+        void dialogAlert('Select one or more top-level layers to use as the new master.')
+        return
+      }
+      let template: VectorElement
+      if (roots.length === 1) {
+        template = deepCloneElementNewIds(roots[0]!)
+      } else {
+        template = {
+          id: nanoid(10),
+          name: 'Symbol',
+          type: 'group',
+          attrs: {},
+          transform: defaultTransform(),
+          visible: true,
+          locked: false,
+          children: roots.map((r) => deepCloneElementNewIds(r))
+        }
+      }
+      withHistory((s) => ({
+        project: {
+          ...s.project,
+          symbols: s.project.symbols.map((x) =>
+            x.id === symbolId ? { ...x, template } : x
+          )
+        }
+      }))
+    },
+
+    deleteSymbol: (symbolId) => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish symbol editing before changing symbols on the main document.')
+        return
+      }
+      withHistory((s) => {
+        const { roots, removedIds } = stripSymbolInstancesByMasterId(s.project.elements, symbolId)
+        const removeSet = new Set(removedIds)
+        const nextTracks = s.tracks.filter((t) => !removeSet.has(t.elementId))
+        return {
+          project: {
+            ...s.project,
+            elements: roots,
+            symbols: s.project.symbols.filter((x) => x.id !== symbolId)
+          },
+          tracks: nextTracks,
+          selectedIds: s.selectedIds.filter((id) => !removeSet.has(id))
+        }
+      })
+    },
+
+    placeSymbolInstance: (symbolId) => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish symbol editing to return to the main document first.')
+        return
+      }
+      const s0 = get()
+      const def = s0.project.symbols.find((x) => x.id === symbolId)
+      if (!def) return
+      const inst: VectorElement = {
+        id: nanoid(10),
+        name: def.name,
+        type: 'symbolInstance',
+        attrs: { __symbolId: def.id },
+        transform: defaultTransform(),
+        visible: true,
+        locked: false
+      }
+      withHistory((s) => ({
+        project: { ...s.project, elements: [...s.project.elements, inst] },
+        selectedIds: [inst.id]
+      }))
+    },
+
+    beginSymbolEdit: (symbolId) => {
+      const s = get()
+      if (s.symbolEditBackup) {
+        void dialogAlert('Finish editing the current symbol first.')
+        return
+      }
+      const sym = s.project.symbols.find((x) => x.id === symbolId)
+      if (!sym) return
+      const restore: SymbolEditRestoreSnapshot = {
+        project: structuredClone(s.project),
+        projectPath: s.projectPath,
+        tracks: structuredClone(s.tracks),
+        selectedIds: [...s.selectedIds],
+        viewBox: { ...s.viewBox },
+        zoom: s.zoom,
+        mode: s.mode,
+        activeTool: s.activeTool,
+        historyPast: structuredClone(s.historyPast),
+        historyFuture: structuredClone(s.historyFuture),
+        currentTime: s.currentTime,
+        duration: s.duration,
+        fps: s.fps,
+        loop: s.loop,
+        autoKeyframe: s.autoKeyframe,
+        isPlaying: s.isPlaying
+      }
+      set({
+        symbolEditBackup: { symbolId, symbolName: sym.name, restore },
+        project: {
+          ...s.project,
+          name: `${sym.name} — editing symbol`,
+          elements: [structuredClone(sym.template)],
+          symbols: structuredClone(s.project.symbols)
+        },
+        tracks: [],
+        selectedIds: [],
+        historyPast: [],
+        historyFuture: [],
+        mode: 'draw',
+        activeTool: 'select',
+        viewBox: { x: 0, y: 0, width: s.project.width, height: s.project.height },
+        zoom: 1,
+        currentTime: 0,
+        isPlaying: false
+      })
+    },
+
+    commitSymbolEdit: () => {
+      const b = get().symbolEditBackup
+      if (!b) return
+      const els = get().project.elements
+      if (els.length === 0) {
+        void dialogAlert('Nothing to save — add symbol artwork before finishing.')
+        return
+      }
+      let template: VectorElement
+      if (els.length === 1) {
+        template = structuredClone(els[0]!)
+      } else {
+        template = {
+          id: nanoid(10),
+          name: b.symbolName,
+          type: 'group',
+          attrs: {},
+          transform: defaultTransform(),
+          visible: true,
+          locked: false,
+          children: structuredClone(els)
+        }
+      }
+      const main = b.restore.project
+      const nextSymbols = main.symbols.map((x) =>
+        x.id === b.symbolId ? { ...x, template } : x
+      )
+      set({
+        symbolEditBackup: null,
+        project: { ...main, symbols: nextSymbols },
+        projectPath: b.restore.projectPath,
+        tracks: b.restore.tracks,
+        selectedIds: b.restore.selectedIds,
+        viewBox: b.restore.viewBox,
+        zoom: b.restore.zoom,
+        mode: b.restore.mode,
+        activeTool: b.restore.activeTool,
+        historyPast: b.restore.historyPast,
+        historyFuture: b.restore.historyFuture,
+        currentTime: b.restore.currentTime,
+        duration: b.restore.duration,
+        fps: b.restore.fps,
+        loop: b.restore.loop,
+        autoKeyframe: b.restore.autoKeyframe,
+        isPlaying: b.restore.isPlaying
+      })
+    },
+
+    cancelSymbolEdit: () => {
+      const b = get().symbolEditBackup
+      if (!b) return
+      void dialogConfirm({
+        message: 'Discard edits to this symbol?',
+        confirmLabel: 'Discard',
+        cancelLabel: 'Keep editing'
+      }).then((ok) => {
+        if (!ok) return
+        const snap = get().symbolEditBackup
+        if (!snap) return
+        const r = snap.restore
+        set({
+          symbolEditBackup: null,
+          project: r.project,
+          projectPath: r.projectPath,
+          tracks: r.tracks,
+          selectedIds: r.selectedIds,
+          viewBox: r.viewBox,
+          zoom: r.zoom,
+          mode: r.mode,
+          activeTool: r.activeTool,
+          historyPast: r.historyPast,
+          historyFuture: r.historyFuture,
+          currentTime: r.currentTime,
+          duration: r.duration,
+          fps: r.fps,
+          loop: r.loop,
+          autoKeyframe: r.autoKeyframe,
+          isPlaying: r.isPlaying
+        })
+      })
+    },
+
+    detachSymbolInstance: (instanceId) => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish symbol editing before detaching instances.')
+        return
+      }
+      const s0 = get()
+      const loc = findElement(s0.project.elements, instanceId)
+      if (!loc || loc.node.type !== 'symbolInstance') return
+      const sid = String(loc.node.attrs.__symbolId ?? '')
+      const def = s0.project.symbols.find((x) => x.id === sid)
+      if (!def) {
+        void dialogAlert('Could not find symbol definition for this instance.')
+        return
+      }
+      const inner = unlockElementTree(deepCloneElementNewIds(def.template))
+      const replacement: VectorElement = {
+        id: nanoid(10),
+        name: `${loc.node.name} (detached)`,
+        type: 'group',
+        attrs: {},
+        transform: { ...loc.node.transform },
+        visible: loc.node.visible !== false,
+        locked: false,
+        children: [inner]
+      }
+      const parentId = loc.parent?.id ?? null
+      const insertIndex = loc.index
+      withHistory((s) => {
+        let els = removeElementById(s.project.elements, instanceId)
+        els = insertElement(els, parentId, insertIndex, replacement)
+        return {
+          project: { ...s.project, elements: els },
+          tracks: s.tracks.filter((t) => t.elementId !== instanceId),
+          selectedIds: [replacement.id]
+        }
+      })
+    },
+
     serializeProject: () => {
       const s = get()
       const payload = {
@@ -559,6 +1205,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         height: s.project.height,
         elements: s.project.elements,
         assets: s.project.assets,
+        gradients: s.project.gradients,
+        symbols: s.project.symbols,
         animations: s.tracks,
         currentTime: s.currentTime,
         duration: s.duration
@@ -567,6 +1215,10 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
 
     hydrateFromJson: (json) => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish or cancel symbol editing before opening a project.')
+        return
+      }
       const data = JSON.parse(json) as {
         version?: number
         id?: string
@@ -575,6 +1227,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         height?: number
         elements?: VectorElement[]
         assets?: Project['assets']
+        gradients?: GradientDef[]
+        symbols?: SymbolDefinition[]
         animations?: AnimationTrack[]
         currentTime?: number
         duration?: number
@@ -585,7 +1239,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
         width: data.width ?? 800,
         height: data.height ?? 600,
         elements: data.elements ?? [],
-        assets: data.assets ?? []
+        assets: data.assets ?? [],
+        gradients: data.gradients ?? [],
+        symbols: data.symbols ?? []
       }
       set({
         project,
