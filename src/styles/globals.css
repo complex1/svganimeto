@@ -1,0 +1,272 @@
+:root {
+  --bg-app: #1a1d23;
+  --bg-panel: #22262e;
+  --bg-elevated: #2a2f38;
+  --border: #3d4450;
+  --text: #e8eaed;
+  --text-muted: #9aa0a6;
+  --accent: #5b8def;
+  --accent-dim: #3d5a8a;
+  --danger: #e57373;
+  --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+  --radius: 6px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: var(--bg-elevated);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+}
+
+button:hover {
+  background: var(--border);
+}
+
+button.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+button.primary:hover {
+  filter: brightness(1.08);
+}
+
+input[type='text'],
+input[type='number'] {
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  width: 100%;
+}
+
+input:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+
+.app-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 48px 1fr 260px;
+  grid-template-rows: 1fr 200px;
+  grid-template-areas:
+    'toolbar center inspector'
+    'toolbar bottom bottom';
+  min-height: 0;
+}
+
+.area-toolbar {
+  grid-area: toolbar;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 6px;
+}
+
+.area-center {
+  grid-area: center;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.area-inspector {
+  grid-area: inspector;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  overflow: auto;
+}
+
+.area-bottom {
+  grid-area: bottom;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  min-height: 0;
+}
+
+.panel-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 10px 12px 6px;
+}
+
+.top-bar {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.mode-toggle {
+  display: flex;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.mode-toggle button {
+  border-radius: 0;
+  padding: 4px 14px;
+  font-size: 12px;
+  background: transparent;
+}
+
+.mode-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: #12141a;
+  overflow: hidden;
+}
+
+.layers-tree {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+
+.layers-tree li {
+  padding: 4px 8px 4px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.layers-tree li:hover {
+  background: var(--bg-elevated);
+}
+
+.layers-tree li.selected {
+  background: var(--accent-dim);
+}
+
+.layers-tree .indent {
+  margin-left: 14px;
+}
+
+.timeline-ruler {
+  height: 24px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  cursor: pointer;
+}
+
+.track-row {
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.track-label {
+  width: 140px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid var(--border);
+}
+
+.track-lane {
+  flex: 1;
+  position: relative;
+  height: 100%;
+}
+
+.keyframe-dot {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  cursor: grab;
+}
+
+.keyframe-dot:hover {
+  transform: translate(-50%, -50%) scale(1.15);
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ff7043;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -5px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 8px solid #ff7043;
+}
