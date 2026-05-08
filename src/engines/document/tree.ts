@@ -133,6 +133,32 @@ export function reorderSiblings(
 }
 
 /** Chain from root to target (inclusive), for accumulating SVG transforms. */
+const BUCKET_DRAW_TYPES = new Set([
+  'path',
+  'rect',
+  'circle',
+  'ellipse',
+  'line',
+  'polygon',
+  'polyline'
+])
+
+/**
+ * Document paint order (first = bottom, last = top) for drawable leaves (no groups / text / images).
+ */
+export function collectDrawableLeavesPaintOrder(roots: VectorElement[]): VectorElement[] {
+  const out: VectorElement[] = []
+  const walk = (el: VectorElement) => {
+    if (el.type === 'group') {
+      for (const c of el.children ?? []) walk(c)
+    } else if (BUCKET_DRAW_TYPES.has(el.type) && el.visible !== false) {
+      out.push(el)
+    }
+  }
+  for (const r of roots) walk(r)
+  return out
+}
+
 export function findAncestorChain(roots: VectorElement[], id: string): VectorElement[] | null {
   function walk(nodes: VectorElement[], stack: VectorElement[]): VectorElement[] | null {
     for (const n of nodes) {

@@ -4,6 +4,7 @@ import {
   faBezierCurve,
   faCircle,
   faEraser,
+  faFillDrip,
   faFont,
   faMinus,
   faObjectGroup,
@@ -31,6 +32,7 @@ export function LeftToolbar() {
     { id: 'path-edit', label: 'Path Edit (N)', icon: faBezierCurve },
     { id: 'brush', label: 'Brush (B)', icon: faPaintbrush },
     { id: 'eraser', label: 'Eraser (X)', icon: faEraser },
+    { id: 'fill', label: 'Fill (F)', icon: faFillDrip },
     { id: 'text', label: 'Text (T)', icon: faFont }
   ]
 

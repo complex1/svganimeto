@@ -161,7 +161,91 @@ function convertNode(node: Element): VectorElement | null {
   }
 }
 
+function parseSvgAttributeChunk(header: string): Record<string, string | number> {
+  const out: Record<string, string | number> = {}
+  const re = /([:A-Za-z_][\w:.-]*)\s*=\s*("([^"]*)"|'([^']*)')/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(header))) {
+    const key = m[1]
+    const val = m[3] ?? m[4] ?? ''
+    if (key.toLowerCase() === 'id') continue
+    out[key] = val
+  }
+  return out
+}
+
+/**
+ * ImageTracer SVG is flat `<path … d="…" />` tags. DOMParser duplicates the whole string as a DOM tree
+ * and can OOM the Electron renderer; this path only allocates our `VectorElement[]`.
+ */
+function importImageTracerSvgAsProject(svgString: string, projectName: string): Project {
+  resetNamingCounters()
+  let width = 800
+  let height = 600
+  const vb = /viewBox="\s*[\d.-]+\s+[\d.-]+\s+([\d.]+)\s+([\d.]+)\s*"/i.exec(svgString)
+  if (vb) {
+    width = parseFloat(vb[1]) || width
+    height = parseFloat(vb[2]) || height
+  } else {
+    const wm = /width="\s*([\d.]+)\s*"/i.exec(svgString)
+    const hm = /height="\s*([\d.]+)\s*"/i.exec(svgString)
+    if (wm) width = parseFloat(wm[1]) || width
+    if (hm) height = parseFloat(hm[1]) || height
+  }
+
+  const elements: VectorElement[] = []
+  let i = 0
+  while (i < svgString.length) {
+    const p = svgString.toLowerCase().indexOf('<path ', i)
+    if (p < 0) break
+    const attrsStart = p + 6
+    const dPos = svgString.indexOf('d="', attrsStart)
+    if (dPos < 0) break
+    const header = svgString.slice(attrsStart, dPos).trim()
+    const attrs = parseSvgAttributeChunk(header)
+    const valueStart = dPos + 3
+    let q = valueStart
+    while (q < svgString.length) {
+      if (svgString[q] === '"' && svgString[q - 1] !== '\\') break
+      q += 1
+    }
+    attrs.d = svgString.slice(valueStart, q)
+    const close = svgString.indexOf('/>', q)
+    if (close < 0) break
+
+    const id = nanoid(10)
+    const name = smartLayerName('path', null)
+    elements.push({
+      id,
+      name,
+      type: 'path',
+      attrs,
+      transform: defaultTransform(),
+      visible: true,
+      locked: false
+    })
+    i = close + 2
+  }
+
+  return {
+    id: nanoid(),
+    name: projectName,
+    width,
+    height,
+    elements,
+    assets: [],
+    gradients: [],
+    symbols: []
+  }
+}
+
 export function importSvgString(svgString: string, projectName = 'Imported'): Project {
+  if (svgString.includes('imagetracer.js version')) {
+    const fast = importImageTracerSvgAsProject(svgString, projectName)
+    if (fast.elements.length > 0) return fast
+    console.warn('[svgImporter] ImageTracer fast parse produced 0 paths; falling back to DOMParser')
+  }
+
   resetNamingCounters()
   const doc = new DOMParser().parseFromString(svgString, 'image/svg+xml')
   const parserErr = doc.querySelector('parsererror')

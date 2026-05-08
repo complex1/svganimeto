@@ -9,7 +9,19 @@ import {
   type VectorElement
 } from '@/types/document'
 import type { GradientDef } from '@/types/gradient'
-import type { AnimatableProperty, AnimationTrack, EasingId, Keyframe } from '@/types/animation'
+import type {
+  AnimatableProperty,
+  AnimationTrack,
+  EasingId,
+  Keyframe,
+  KeyframeClipboardEntry,
+  KeyframeSelectionEntry
+} from '@/types/animation'
+import { mergeTransformFromTracks } from '@/engines/animation/interpolate'
+import {
+  hexToPackedRgb,
+  mergeAttrsFromTracks
+} from '@/engines/animation/attrAnimation'
 import { importSvgString } from '@/engines/importer/svgImporter'
 import {
   findAncestorChain,
@@ -50,6 +62,7 @@ export type DrawTool =
   | 'path-edit'
   | 'brush'
   | 'eraser'
+  | 'fill'
   | 'text'
 
 const HISTORY_MAX = 80
@@ -85,9 +98,12 @@ export type SymbolEditRestoreSnapshot = {
   currentTime: number
   duration: number
   fps: number
+  playbackSpeed: number
   loop: boolean
   autoKeyframe: boolean
   isPlaying: boolean
+  selectedKeyframes: KeyframeSelectionEntry[]
+  keyframeClipboard: KeyframeClipboardEntry[] | null
 }
 
 export type SymbolEditBackup = {
@@ -119,6 +135,8 @@ type EditorState = {
   currentTime: number
   duration: number
   fps: number
+  /** Playback rate multiplier (1 = real-time). */
+  playbackSpeed: number
   isPlaying: boolean
   loop: boolean
   mode: EditorMode
@@ -151,14 +169,26 @@ type EditorState = {
   /** When set, the editor canvas shows only this symbol's master for isolated editing. */
   symbolEditBackup: SymbolEditBackup | null
 
+  /** Timeline keyframe multi-selection (UI only). */
+  selectedKeyframes: KeyframeSelectionEntry[]
+  keyframeClipboard: KeyframeClipboardEntry[] | null
+
   pushHistory: () => void
   undo: () => void
   redo: () => void
   clearHistory: () => void
+  /** Drop document + timeline + history without clearing project path (memory relief before huge import). */
+  evictToEmptyProject: () => void
 
   newProject: () => void
   setProject: (p: Project, path?: string | null) => void
-  importSvgFromString: (svg: string, name?: string) => void
+  importSvgFromString: (
+    svg: string,
+    name?: string,
+    opts?: { resetHistory?: boolean }
+  ) => void
+  /** Locked reference image only — trace paths manually with Pen / Pencil on top (or elsewhere). */
+  importRasterManualReference: (dataUrl: string, width: number, height: number, projectName: string) => void
   setElements: (elements: VectorElement[], opts?: { skipHistory?: boolean }) => void
   setProjectMeta: (partial: Partial<Pick<Project, 'name' | 'width' | 'height'>>, opts?: { skipHistory?: boolean }) => void
 
@@ -189,6 +219,7 @@ type EditorState = {
   setCurrentTime: (t: number) => void
   setDuration: (d: number) => void
   setFps: (f: number) => void
+  setPlaybackSpeed: (n: number) => void
   setLoop: (v: boolean) => void
   setIsPlaying: (v: boolean) => void
 
@@ -213,12 +244,23 @@ type EditorState = {
     time: number,
     value: number,
     easing?: EasingId,
-    opts?: { skipHistory?: boolean }
+    opts?: { skipHistory?: boolean; valueText?: string }
   ) => void
   removeKeyframe: (trackId: string, keyframeId: string, opts?: { skipHistory?: boolean }) => void
   moveKeyframe: (trackId: string, keyframeId: string, time: number, opts?: { skipHistory?: boolean }) => void
   setTracks: (tracks: AnimationTrack[], opts?: { skipHistory?: boolean }) => void
   pruneTracksForElement: (elementId: string, opts?: { skipHistory?: boolean }) => void
+
+  setSelectedKeyframes: (entries: KeyframeSelectionEntry[]) => void
+  clearKeyframeSelection: () => void
+  setKeyframeEasing: (trackId: string, keyframeId: string, easing: EasingId) => void
+  copySelectedKeyframes: () => void
+  pasteKeyframesAtTime: (anchorTime?: number) => void
+  nudgeSelectedKeyframes: (deltaSec: number) => void
+  deleteSelectedKeyframes: () => void
+  addKeyframeAtPlayhead: (elementId: string, property: AnimatableProperty) => void
+  jumpToPrevKeyframe: () => void
+  jumpToNextKeyframe: () => void
 
   upsertGradient: (g: GradientDef, opts?: { skipHistory?: boolean }) => void
   applyBooleanOperation: (op: BooleanOpKind) => void
@@ -264,7 +306,8 @@ function upsertKeyframeInTracks(
   property: AnimatableProperty,
   time: number,
   value: number,
-  easing?: EasingId
+  easing?: EasingId,
+  valueText?: string
 ): AnimationTrack[] {
   const EPS = 1e-4
   let tid = tracks.find((t) => t.elementId === elementId && t.property === property)?.id
@@ -277,11 +320,17 @@ function upsertKeyframeInTracks(
     if (tr.id !== tid) return tr
     const kfs = [...tr.keyframes]
     const idx = kfs.findIndex((k) => Math.abs(k.time - time) < EPS)
+    const prev = idx >= 0 ? kfs[idx] : undefined
     const k: Keyframe = {
-      id: idx >= 0 ? kfs[idx].id : nanoid(8),
+      id: idx >= 0 ? kfs[idx]!.id : nanoid(8),
       time,
       value,
-      easing: easing ?? kfs[idx]?.easing
+      easing: easing ?? prev?.easing
+    }
+    if (property === 'pathD') {
+      k.valueText = valueText ?? prev?.valueText ?? ''
+    } else if (valueText !== undefined) {
+      k.valueText = valueText
     }
     if (idx >= 0) kfs[idx] = k
     else kfs.push(k)
@@ -313,6 +362,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     currentTime: 0,
     duration: 3,
     fps: 60,
+    playbackSpeed: 1,
     isPlaying: false,
     loop: false,
     mode: 'draw',
@@ -338,6 +388,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
     historyFuture: [],
 
     symbolEditBackup: null,
+
+    selectedKeyframes: [],
+    keyframeClipboard: null,
 
     pushHistory: () => {
       const snap = captureHistory(get())
@@ -373,6 +426,21 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     clearHistory: () => set({ historyPast: [], historyFuture: [] }),
 
+    evictToEmptyProject: () => {
+      if (get().symbolEditBackup) return
+      const p = emptyProject()
+      set({
+        project: p,
+        selectedIds: [],
+        selectedKeyframes: [],
+        keyframeClipboard: null,
+        tracks: [],
+        viewBox: { x: 0, y: 0, width: p.width, height: p.height },
+        historyPast: [],
+        historyFuture: []
+      })
+    },
+
     newProject: () => {
       if (get().symbolEditBackup) {
         void dialogAlert('Finish or cancel symbol editing before starting a new project.')
@@ -384,8 +452,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
         projectPath: null,
         activeTool: 'select',
         selectedIds: [],
+        selectedKeyframes: [],
+        keyframeClipboard: null,
         tracks: [],
         currentTime: 0,
+        playbackSpeed: 1,
         viewBox: { x: 0, y: 0, width: p.width, height: p.height },
         historyPast: [],
         historyFuture: []
@@ -404,24 +475,78 @@ export const useEditorStore = create<EditorState>((set, get) => {
           symbols: p.symbols ?? []
         },
         projectPath: path ?? null,
+        selectedKeyframes: [],
+        keyframeClipboard: null,
         viewBox: { x: 0, y: 0, width: p.width, height: p.height },
         historyPast: [],
         historyFuture: []
       })
     },
 
-    importSvgFromString: (svg, name) => {
+    importSvgFromString: (svg, name, opts) => {
       if (get().symbolEditBackup) {
         void dialogAlert('Finish or cancel symbol editing before importing SVG.')
         return
       }
       const p = importSvgString(svg, name ?? 'Imported')
-      withHistory(() => ({
+      // Raster traces can replace the doc with an enormous layer tree. Pushing a history snapshot
+      // clones the previous project via structuredClone — peak memory can OOM the renderer.
+      if (opts?.resetHistory) {
+        set({
+          project: p,
+          selectedIds: [],
+          selectedKeyframes: [],
+          keyframeClipboard: null,
+          tracks: [],
+          viewBox: { x: 0, y: 0, width: p.width, height: p.height },
+          historyPast: [],
+          historyFuture: []
+        })
+      } else {
+        withHistory(() => ({
+          project: p,
+          selectedIds: [],
+          selectedKeyframes: [],
+          keyframeClipboard: null,
+          tracks: [],
+          viewBox: { x: 0, y: 0, width: p.width, height: p.height }
+        }))
+      }
+    },
+
+    importRasterManualReference: (dataUrl, width, height, projectName) => {
+      if (get().symbolEditBackup) {
+        void dialogAlert('Finish or cancel symbol editing before importing raster.')
+        return
+      }
+      const id = nanoid(10)
+      const img: VectorElement = {
+        id,
+        name: 'Raster reference',
+        type: 'image',
+        attrs: { href: dataUrl, width, height },
+        transform: defaultTransform(),
+        visible: true,
+        locked: true
+      }
+      const p = emptyProject()
+      p.name = projectName.trim() || 'Manual trace'
+      p.width = width
+      p.height = height
+      p.elements = [img]
+      set({
         project: p,
-        selectedIds: [],
+        projectPath: null,
+        selectedIds: [id],
+        selectedKeyframes: [],
+        keyframeClipboard: null,
         tracks: [],
-        viewBox: { x: 0, y: 0, width: p.width, height: p.height }
-      }))
+        viewBox: { x: 0, y: 0, width, height },
+        historyPast: [],
+        historyFuture: [],
+        activeTool: 'pen',
+        mode: 'draw'
+      })
     },
 
     setElements: (elements, opts) =>
@@ -440,10 +565,13 @@ export const useEditorStore = create<EditorState>((set, get) => {
         opts
       ),
 
-    select: (ids) => set({ selectedIds: ids }),
+    select: (ids) => set({ selectedIds: ids, selectedKeyframes: [] }),
     addToSelection: (id) =>
-      set((s) => ({ selectedIds: s.selectedIds.includes(id) ? s.selectedIds : [...s.selectedIds, id] })),
-    clearSelection: () => set({ selectedIds: [] }),
+      set((s) => ({
+        selectedIds: s.selectedIds.includes(id) ? s.selectedIds : [...s.selectedIds, id],
+        selectedKeyframes: []
+      })),
+    clearSelection: () => set({ selectedIds: [], selectedKeyframes: [] }),
 
     setMode: (m) => set({ mode: m }),
     setActiveTool: (tool) => set({ activeTool: tool }),
@@ -526,6 +654,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         currentTime: Math.min(s.currentTime, Math.max(0.1, d))
       })),
     setFps: (f) => set({ fps: Math.max(1, Math.min(120, f)) }),
+    setPlaybackSpeed: (n) => set({ playbackSpeed: Math.max(0.05, Math.min(8, n)) }),
     setLoop: (v) => set({ loop: v }),
     setIsPlaying: (v) => set({ isPlaying: v }),
 
@@ -538,9 +667,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       let newTracks = s0.tracks
       const props = Object.keys(partial) as (keyof Transform)[]
       if (
-        !opts?.skipHistory &&
-        s0.mode === 'animate' &&
-        s0.autoKeyframe &&
+        (s0.mode === 'animate' || s0.mode === 'preview') &&
         !s0.isPlaying
       ) {
         const fresh = flattenForLayers(newEls).find((x) => x.el.id === id)?.el
@@ -588,15 +715,66 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     setElementAttrs: (id, attrs, opts) =>
       withHistory(
-        (s) => ({
-          project: {
-            ...s.project,
-            elements: updateElementById(s.project.elements, id, (el) => ({
-              ...el,
-              attrs: { ...el.attrs, ...attrs }
-            }))
+        (s) => {
+          const newEls = updateElementById(s.project.elements, id, (el) => ({
+            ...el,
+            attrs: { ...el.attrs, ...attrs }
+          }))
+          let nextTracks = s.tracks
+          if (
+            (s.mode === 'animate' || s.mode === 'preview') &&
+            !s.isPlaying &&
+            !opts?.skipHistory
+          ) {
+            const fresh = flattenForLayers(newEls).find((x) => x.el.id === id)?.el
+            if (fresh && !fresh.locked) {
+              const t = s.currentTime
+              const pushPackedColor = (prop: 'fill' | 'stroke' | 'fxShadowColor', key: string) => {
+                if (!(key in attrs)) return
+                const raw = attrs[key]
+                if (typeof raw !== 'string' || !raw.startsWith('#')) return
+                const p = hexToPackedRgb(raw)
+                if (p !== undefined) {
+                  nextTracks = upsertKeyframeInTracks(nextTracks, id, prop, t, p)
+                }
+              }
+              pushPackedColor('fill', 'fill')
+              pushPackedColor('stroke', 'stroke')
+              pushPackedColor('fxShadowColor', '__fxShadowColor')
+              if ('stroke-width' in attrs) {
+                const sw = attrs['stroke-width']
+                const n = typeof sw === 'number' ? sw : Number(sw)
+                if (Number.isFinite(n)) {
+                  nextTracks = upsertKeyframeInTracks(nextTracks, id, 'strokeWidth', t, n)
+                }
+              }
+              if ('d' in attrs && typeof attrs.d === 'string') {
+                nextTracks = upsertKeyframeInTracks(nextTracks, id, 'pathD', t, 0, undefined, attrs.d)
+              }
+              const numFx: Array<{ prop: AnimatableProperty; key: string }> = [
+                { prop: 'fxBlur', key: '__fxBlur' },
+                { prop: 'fxShadowX', key: '__fxShadowX' },
+                { prop: 'fxShadowY', key: '__fxShadowY' },
+                { prop: 'fxShadowBlur', key: '__fxShadowBlur' }
+              ]
+              for (const { prop, key } of numFx) {
+                if (!(key in attrs)) continue
+                const v = attrs[key]
+                const n = typeof v === 'number' ? v : Number(v)
+                if (Number.isFinite(n)) {
+                  nextTracks = upsertKeyframeInTracks(nextTracks, id, prop, t, n)
+                }
+              }
+            }
           }
-        }),
+          return {
+            project: {
+              ...s.project,
+              elements: newEls
+            },
+            tracks: nextTracks
+          }
+        },
         opts
       ),
 
@@ -651,6 +829,10 @@ export const useEditorStore = create<EditorState>((set, get) => {
           return {
             project: { ...s.project, elements: els },
             selectedIds: [],
+            selectedKeyframes: s.selectedKeyframes.filter((sel) => {
+              const tr = s.tracks.find((t) => t.id === sel.trackId)
+              return tr && !ids.includes(tr.elementId)
+            }),
             tracks: s.tracks.filter((tr) => !ids.includes(tr.elementId))
           }
         },
@@ -663,6 +845,10 @@ export const useEditorStore = create<EditorState>((set, get) => {
         (s) => ({
           project: { ...s.project, elements: removeElementById(s.project.elements, id) },
           selectedIds: s.selectedIds.filter((sid) => sid !== id),
+          selectedKeyframes: s.selectedKeyframes.filter((sel) => {
+            const tr = s.tracks.find((t) => t.id === sel.trackId)
+            return tr && tr.elementId !== id
+          }),
           tracks: s.tracks.filter((tr) => tr.elementId !== id)
         }),
         opts
@@ -690,6 +876,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     upsertKeyframe: (elementId, property, time, value, easing, opts) => {
       const EPS = 1e-4
+      const valueText = opts?.valueText
       const mut = (s: EditorState): Partial<EditorState> => {
         let tracks = s.tracks
         let tid = tracks.find((t) => t.elementId === elementId && t.property === property)?.id
@@ -701,11 +888,17 @@ export const useEditorStore = create<EditorState>((set, get) => {
           if (tr.id !== tid) return tr
           const kfs = [...tr.keyframes]
           const idx = kfs.findIndex((k) => Math.abs(k.time - time) < EPS)
+          const prev = idx >= 0 ? kfs[idx] : undefined
           const k: Keyframe = {
-            id: idx >= 0 ? kfs[idx].id : nanoid(8),
+            id: idx >= 0 ? kfs[idx]!.id : nanoid(8),
             time,
             value,
-            easing: easing ?? kfs[idx]?.easing
+            easing: easing ?? prev?.easing
+          }
+          if (property === 'pathD') {
+            k.valueText = valueText ?? prev?.valueText ?? ''
+          } else if (valueText !== undefined) {
+            k.valueText = valueText
           }
           if (idx >= 0) kfs[idx] = k
           else kfs.push(k)
@@ -742,19 +935,232 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     moveKeyframe: (trackId, keyframeId, time, opts) =>
       withHistory(
-        (s) => ({
-          tracks: s.tracks.map((tr) => {
-            if (tr.id !== trackId) return tr
-            return {
-              ...tr,
-              keyframes: tr.keyframes
-                .map((k) => (k.id === keyframeId ? { ...k, time: Math.max(0, time) } : k))
-                .sort((a, b) => a.time - b.time)
-            }
-          })
-        }),
+        (s) => {
+          const clamped = Math.max(0, Math.min(s.duration, time))
+          return {
+            tracks: s.tracks.map((tr) => {
+              if (tr.id !== trackId) return tr
+              return {
+                ...tr,
+                keyframes: tr.keyframes
+                  .map((k) => (k.id === keyframeId ? { ...k, time: clamped } : k))
+                  .sort((a, b) => a.time - b.time)
+              }
+            })
+          }
+        },
         opts
       ),
+
+    setSelectedKeyframes: (entries) => set({ selectedKeyframes: entries }),
+
+    clearKeyframeSelection: () => set({ selectedKeyframes: [] }),
+
+    setKeyframeEasing: (trackId, keyframeId, easing) =>
+      withHistory((s) => ({
+        tracks: s.tracks.map((tr) => {
+          if (tr.id !== trackId) return tr
+          return {
+            ...tr,
+            keyframes: tr.keyframes.map((k) => (k.id === keyframeId ? { ...k, easing } : k))
+          }
+        })
+      })),
+
+    copySelectedKeyframes: () => {
+      const s = get()
+      if (s.selectedKeyframes.length === 0) {
+        set({ keyframeClipboard: null })
+        return
+      }
+      const items: KeyframeClipboardEntry[] = []
+      let minT = Infinity
+      for (const sel of s.selectedKeyframes) {
+        const tr = s.tracks.find((t) => t.id === sel.trackId)
+        const k = tr?.keyframes.find((x) => x.id === sel.keyframeId)
+        if (tr && k) minT = Math.min(minT, k.time)
+      }
+      if (!Number.isFinite(minT)) {
+        set({ keyframeClipboard: null })
+        return
+      }
+      for (const sel of s.selectedKeyframes) {
+        const tr = s.tracks.find((t) => t.id === sel.trackId)
+        const k = tr?.keyframes.find((x) => x.id === sel.keyframeId)
+        if (tr && k) {
+          items.push({
+            elementId: tr.elementId,
+            property: tr.property,
+            offsetFromAnchor: k.time - minT,
+            value: k.value,
+            valueText: k.valueText,
+            easing: k.easing
+          })
+        }
+      }
+      items.sort((a, b) => a.offsetFromAnchor - b.offsetFromAnchor)
+      set({ keyframeClipboard: items })
+    },
+
+    pasteKeyframesAtTime: (anchorTime) => {
+      const s = get()
+      const clip = s.keyframeClipboard
+      if (!clip || clip.length === 0) return
+      const t0 = anchorTime ?? s.currentTime
+      get().pushHistory()
+      const sorted = [...clip].sort((a, b) => a.offsetFromAnchor - b.offsetFromAnchor)
+      for (const entry of sorted) {
+        get().upsertKeyframe(
+          entry.elementId,
+          entry.property,
+          t0 + entry.offsetFromAnchor,
+          entry.value,
+          entry.easing,
+          { skipHistory: true, valueText: entry.valueText }
+        )
+      }
+    },
+
+    nudgeSelectedKeyframes: (deltaSec) => {
+      const s0 = get()
+      if (s0.selectedKeyframes.length === 0) return
+      const d = s0.duration
+      const byTrack = new Map<string, Set<string>>()
+      for (const { trackId, keyframeId } of s0.selectedKeyframes) {
+        if (!byTrack.has(trackId)) byTrack.set(trackId, new Set())
+        byTrack.get(trackId)!.add(keyframeId)
+      }
+      get().pushHistory()
+      for (const [trackId, idSet] of byTrack) {
+        for (const keyframeId of idSet) {
+          const tr = get().tracks.find((t) => t.id === trackId)
+          const k = tr?.keyframes.find((x) => x.id === keyframeId)
+          if (!k) continue
+          const nt = Math.max(0, Math.min(d, k.time + deltaSec))
+          get().moveKeyframe(trackId, keyframeId, nt, { skipHistory: true })
+        }
+      }
+    },
+
+    deleteSelectedKeyframes: () => {
+      const s0 = get()
+      if (s0.selectedKeyframes.length === 0) return
+      const removeByTrack = new Map<string, Set<string>>()
+      for (const { trackId, keyframeId } of s0.selectedKeyframes) {
+        if (!removeByTrack.has(trackId)) removeByTrack.set(trackId, new Set())
+        removeByTrack.get(trackId)!.add(keyframeId)
+      }
+      withHistory((s) => ({
+        tracks: s.tracks
+          .map((tr) => {
+            const rm = removeByTrack.get(tr.id)
+            if (!rm) return tr
+            return { ...tr, keyframes: tr.keyframes.filter((k) => !rm.has(k.id)) }
+          })
+          .filter((tr) => tr.keyframes.length > 0),
+        selectedKeyframes: []
+      }))
+    },
+
+    addKeyframeAtPlayhead: (elementId, property) => {
+      const s = get()
+      const el = flattenForLayers(s.project.elements).find((x) => x.el.id === elementId)?.el
+      if (!el) return
+      const t = s.currentTime
+      const tracks = s.tracks
+
+      const transformKeys: AnimatableProperty[] = [
+        'x',
+        'y',
+        'scaleX',
+        'scaleY',
+        'rotation',
+        'opacity',
+        'skewX',
+        'skewY'
+      ]
+      if (transformKeys.includes(property)) {
+        const merged = mergeTransformFromTracks(el.transform, elementId, tracks, t)
+        const value = merged[property as keyof typeof merged] as number
+        get().upsertKeyframe(elementId, property, t, value)
+        return
+      }
+
+      const mergedAttrs = mergeAttrsFromTracks(el.attrs, elementId, tracks, t)
+
+      if (property === 'fill' || property === 'stroke' || property === 'fxShadowColor') {
+        const raw =
+          property === 'fxShadowColor'
+            ? mergedAttrs.__fxShadowColor
+            : mergedAttrs[property]
+        const s0 = typeof raw === 'string' ? raw : '#cccccc'
+        const packed = hexToPackedRgb(s0.startsWith('#') ? s0 : '#cccccc')
+        if (packed === undefined) return
+        get().upsertKeyframe(elementId, property, t, packed)
+        return
+      }
+
+      if (property === 'pathD') {
+        const d = typeof mergedAttrs.d === 'string' ? mergedAttrs.d : ''
+        get().upsertKeyframe(elementId, property, t, 0, undefined, { valueText: d })
+        return
+      }
+
+      if (property === 'strokeWidth') {
+        const sw = mergedAttrs['stroke-width']
+        const n = typeof sw === 'number' ? sw : Number(sw)
+        get().upsertKeyframe(elementId, property, t, Number.isFinite(n) ? n : 2)
+        return
+      }
+
+      if (
+        property === 'fxBlur' ||
+        property === 'fxShadowX' ||
+        property === 'fxShadowY' ||
+        property === 'fxShadowBlur'
+      ) {
+        const map: Record<typeof property, string> = {
+          fxBlur: '__fxBlur',
+          fxShadowX: '__fxShadowX',
+          fxShadowY: '__fxShadowY',
+          fxShadowBlur: '__fxShadowBlur'
+        }
+        const k = map[property]
+        const v = mergedAttrs[k as keyof typeof mergedAttrs]
+        const n = typeof v === 'number' ? v : Number(v)
+        get().upsertKeyframe(elementId, property, t, Number.isFinite(n) ? n : 0)
+      }
+    },
+
+    jumpToPrevKeyframe: () => {
+      const s = get()
+      const t = s.currentTime
+      let best: number | null = null
+      for (const tr of s.tracks) {
+        for (const k of tr.keyframes) {
+          if (k.time < t - 1e-6) {
+            if (best === null || k.time > best) best = k.time
+          }
+        }
+      }
+      if (best !== null) set({ currentTime: best })
+      else set({ currentTime: 0 })
+    },
+
+    jumpToNextKeyframe: () => {
+      const s = get()
+      const t = s.currentTime
+      let best: number | null = null
+      for (const tr of s.tracks) {
+        for (const k of tr.keyframes) {
+          if (k.time > t + 1e-6) {
+            if (best === null || k.time < best) best = k.time
+          }
+        }
+      }
+      if (best !== null) set({ currentTime: Math.min(s.duration, best) })
+      else set({ currentTime: s.duration })
+    },
 
     setTracks: (nextTracks, opts) =>
       withHistory(() => ({ tracks: nextTracks }), opts),
@@ -1041,6 +1447,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         projectPath: s.projectPath,
         tracks: structuredClone(s.tracks),
         selectedIds: [...s.selectedIds],
+        selectedKeyframes: [...s.selectedKeyframes],
+        keyframeClipboard: s.keyframeClipboard ? structuredClone(s.keyframeClipboard) : null,
         viewBox: { ...s.viewBox },
         zoom: s.zoom,
         mode: s.mode,
@@ -1050,6 +1458,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         currentTime: s.currentTime,
         duration: s.duration,
         fps: s.fps,
+        playbackSpeed: s.playbackSpeed,
         loop: s.loop,
         autoKeyframe: s.autoKeyframe,
         isPlaying: s.isPlaying
@@ -1064,6 +1473,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         },
         tracks: [],
         selectedIds: [],
+        selectedKeyframes: [],
+        keyframeClipboard: null,
         historyPast: [],
         historyFuture: [],
         mode: 'draw',
@@ -1108,6 +1519,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         projectPath: b.restore.projectPath,
         tracks: b.restore.tracks,
         selectedIds: b.restore.selectedIds,
+        selectedKeyframes: b.restore.selectedKeyframes ?? [],
+        keyframeClipboard: b.restore.keyframeClipboard ?? null,
         viewBox: b.restore.viewBox,
         zoom: b.restore.zoom,
         mode: b.restore.mode,
@@ -1117,6 +1530,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         currentTime: b.restore.currentTime,
         duration: b.restore.duration,
         fps: b.restore.fps,
+        playbackSpeed: b.restore.playbackSpeed ?? 1,
         loop: b.restore.loop,
         autoKeyframe: b.restore.autoKeyframe,
         isPlaying: b.restore.isPlaying
@@ -1141,6 +1555,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
           projectPath: r.projectPath,
           tracks: r.tracks,
           selectedIds: r.selectedIds,
+          selectedKeyframes: r.selectedKeyframes ?? [],
+          keyframeClipboard: r.keyframeClipboard ?? null,
           viewBox: r.viewBox,
           zoom: r.zoom,
           mode: r.mode,
@@ -1150,6 +1566,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
           currentTime: r.currentTime,
           duration: r.duration,
           fps: r.fps,
+          playbackSpeed: r.playbackSpeed ?? 1,
           loop: r.loop,
           autoKeyframe: r.autoKeyframe,
           isPlaying: r.isPlaying
@@ -1249,6 +1666,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
         currentTime: data.currentTime ?? 0,
         duration: data.duration ?? 3,
         selectedIds: [],
+        selectedKeyframes: [],
+        keyframeClipboard: null,
+        playbackSpeed: 1,
         viewBox: { x: 0, y: 0, width: project.width, height: project.height },
         historyPast: [],
         historyFuture: []

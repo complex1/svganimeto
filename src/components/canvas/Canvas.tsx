@@ -3,16 +3,18 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faChevronDown, faChevronRight, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons'
 import { useEditorStore } from '@/store/editorStore'
-import { dialogConfirm } from '@/store/dialogStore'
+import { dialogAlert, dialogConfirm } from '@/store/dialogStore'
 import { ElementRenderer } from '@/components/canvas/ElementRenderer'
 import { SelectionOverlay } from '@/components/canvas/SelectionOverlay'
 import { defaultTransform, type VectorElement } from '@/types/document'
 import { flattenForLayers, updateElementById } from '@/engines/document/tree'
 import type { DrawTool } from '@/store/editorStore'
 import type { PathPoint, PathPointMode } from '@/types/document'
+import { buildFillPathFromRasterSample } from '@/engines/geometry/rasterBucketFill'
 import { elementShapeToPathD } from '@/engines/geometry/shapeToPath'
 import { buildPencilPathD } from '@/engines/geometry/pencilPath'
 import { CanvasGuideOverlay } from '@/components/canvas/CanvasGuideOverlay'
+import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
 import type { CanvasGuideType } from '@/types/canvasGuide'
 
 type BrushKind = 'solid' | 'marker' | 'texture'
@@ -479,6 +481,12 @@ export function Canvas() {
   )
 
   const [spaceDown, setSpaceDown] = useState(false)
+  const [marquee, setMarquee] = useState<{
+    pointerId: number
+    start: { x: number; y: number }
+    current: { x: number; y: number }
+    additive: boolean
+  } | null>(null)
   const [draft, setDraft] = useState<{
     tool: Exclude<
       DrawTool,
@@ -490,6 +498,7 @@ export function Canvas() {
       | 'pencil'
       | 'eraser'
       | 'brush'
+      | 'fill'
     >
     start: { x: number; y: number }
     current: { x: number; y: number }
@@ -521,6 +530,13 @@ export function Canvas() {
     strokeWidth: 2.5,
     color: '#111827'
   })
+  const [rasterFillOpts, setRasterFillOpts] = useState({
+    /** Stop expanding when neighbor RGBA is farther than this (per-channel scale). */
+    tolerance: 42,
+    /** Path simplification in SVG units after tracing. */
+    simplifyEpsilon: 1.4
+  })
+  const rasterFillBusyRef = useRef(false)
   const [pencilPreview, setPencilPreview] = useState<Vec2[] | null>(null)
   const pencilStrokeRef = useRef<{ pointerId: number; raw: Vec2[] } | null>(null)
   const lastPencilCommitRef = useRef<{ d: string; at: number } | null>(null)
@@ -680,9 +696,57 @@ export function Canvas() {
         ) as SVGGraphicsElement | null)
       : null
 
+  const marqueeRect =
+    marquee
+      ? {
+          x: Math.min(marquee.start.x, marquee.current.x),
+          y: Math.min(marquee.start.y, marquee.current.y),
+          width: Math.abs(marquee.current.x - marquee.start.x),
+          height: Math.abs(marquee.current.y - marquee.start.y)
+        }
+      : null
+
+  const applyMarqueeSelection = useCallback(
+    (rect: { x: number; y: number; width: number; height: number }, additive: boolean) => {
+      const svg = svgRef.current
+      if (!svg) return
+      const rx2 = rect.x + rect.width
+      const ry2 = rect.y + rect.height
+      const overlaps = (b: { x: number; y: number; width: number; height: number }) => {
+        const bx2 = b.x + b.width
+        const by2 = b.y + b.height
+        return b.x <= rx2 && bx2 >= rect.x && b.y <= ry2 && by2 >= rect.y
+      }
+
+      const flat = flattenForLayers(project.elements)
+      const hits = flat
+        .filter((n) => !n.el.locked && n.el.visible !== false)
+        .map((n) => {
+          const node = svg.querySelector(`[data-el-id="${CSS.escape(n.el.id)}"]`) as SVGGraphicsElement | null
+          if (!node) return null
+          const b = bboxInSvgRootSpace(node, svg)
+          if (!b || !overlaps(b)) return null
+          return n.el.id
+        })
+        .filter((id): id is string => Boolean(id))
+
+      if (additive) {
+        const merged = [...new Set([...selectedIds, ...hits])]
+        select(merged)
+      } else {
+        select(hits)
+      }
+    },
+    [project.elements, select, selectedIds]
+  )
+
   useEffect(() => {
     if (activeTool !== 'pen') setPenDraft(null)
   }, [activeTool])
+
+  useEffect(() => {
+    if (activeTool !== 'select' || mode !== 'draw') setMarquee(null)
+  }, [activeTool, mode])
 
   useEffect(() => {
     if (activeTool !== 'brush') {
@@ -866,9 +930,70 @@ export function Canvas() {
     })
   }
 
+  const tryApplyBucketFill = useCallback(
+    async (clientX: number, clientY: number) => {
+      const svg = svgRef.current
+      if (!svg || rasterFillBusyRef.current) return
+      rasterFillBusyRef.current = true
+      try {
+        const p = clientToSvg(svg, clientX, clientY)
+        const st = useEditorStore.getState()
+        const d = await buildFillPathFromRasterSample(
+          st.project,
+          st.tracks,
+          st.currentTime,
+          p.x,
+          p.y,
+          {
+            tolerance: rasterFillOpts.tolerance,
+            simplifyEpsilon: rasterFillOpts.simplifyEpsilon
+          }
+        )
+        if (!d) {
+          void dialogAlert(
+            'Could not create a fill here. Try another spot, increase tolerance, or click closer to the artboard.'
+          )
+          return
+        }
+        const id = nanoid(10)
+        const n = st.project.elements.length
+        addElement(
+          {
+            id,
+            name: `Fill ${n + 1}`,
+            type: 'path',
+            attrs: {
+              d,
+              fill: pencilSettings.color,
+              stroke: 'none'
+            },
+            transform: defaultTransform(),
+            visible: true,
+            locked: false
+          },
+          { select: true }
+        )
+      } catch (e) {
+        console.error('[raster fill]', e)
+        void dialogAlert(e instanceof Error ? e.message : 'Raster fill failed.')
+      } finally {
+        rasterFillBusyRef.current = false
+      }
+    },
+    [addElement, pencilSettings.color, rasterFillOpts.simplifyEpsilon, rasterFillOpts.tolerance]
+  )
+
   const onElementPointerDown = useCallback(
-    (id: string, shiftKey: boolean) => {
+    (id: string, shiftKey: boolean, clientX: number, clientY: number, button: number) => {
       const clicked = flattenForLayers(useEditorStore.getState().project.elements).find((x) => x.el.id === id)?.el
+      if (
+        mode === 'draw' &&
+        activeTool === 'fill' &&
+        button === 0
+      ) {
+        tryApplyBucketFill(clientX, clientY)
+        return
+      }
       if (
         activeTool === 'path-edit' &&
         clicked &&
@@ -928,7 +1053,14 @@ export function Canvas() {
       if (shiftKey) addToSelection(id)
       else select([id])
     },
-    [activeTool, addToSelection, select, setElements]
+    [
+      activeTool,
+      mode,
+      addToSelection,
+      select,
+      setElements,
+      tryApplyBucketFill
+    ]
   )
 
   /** React's onWheel is passive in many browsers → preventDefault ignored. Use capture + non-passive native listener. */
@@ -959,14 +1091,37 @@ export function Canvas() {
     const isLeft = e.button === 0
     const drawEnabled =
       mode === 'draw' &&
-      ['rect', 'circle', 'ellipse', 'line', 'pen', 'pencil', 'eraser', 'brush', 'text'].includes(activeTool)
+      ['rect', 'circle', 'ellipse', 'line', 'pen', 'pencil', 'eraser', 'brush', 'text', 'fill'].includes(
+        activeTool
+      )
     const targetEl = e.target as HTMLElement
     const overArtboard = e.target === e.currentTarget || targetEl.dataset?.artboard === '1'
+
+    if (mode === 'draw' && activeTool === 'select' && isLeft && overArtboard && !spaceDown) {
+      const svg = svgRef.current
+      if (!svg) return
+      const p = clientToSvg(svg, e.clientX, e.clientY)
+      setMarquee({
+        pointerId: e.pointerId,
+        start: p,
+        current: p,
+        additive: e.shiftKey
+      })
+      if (!e.shiftKey) {
+        clearSelection()
+      }
+      ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
+      return
+    }
 
     if (drawEnabled && isLeft && overArtboard) {
       const svg = svgRef.current
       if (!svg) return
       const p = clientToSvg(svg, e.clientX, e.clientY)
+      if (activeTool === 'fill') {
+        tryApplyBucketFill(e.clientX, e.clientY)
+        return
+      }
       if (activeTool === 'brush') {
         const settingsSnapshot: BrushSettings = { ...brushSettings }
         const rand = mulberry32((Date.now() ^ e.pointerId * 2654435761) >>> 0)
@@ -1051,6 +1206,7 @@ export function Canvas() {
           | 'pencil'
           | 'eraser'
           | 'brush'
+          | 'fill'
         >,
         start: p,
         current: p
@@ -1085,6 +1241,12 @@ export function Canvas() {
         else if (gv.kind === 'vpT') st.setCanvasGuideVpTop({ nx, ny })
         else if (gv.kind === 'fish') st.setCanvasGuideFisheyeCenter({ nx, ny })
       }
+      return
+    }
+
+    if (marquee && marquee.pointerId === e.pointerId && svgRef.current) {
+      const p = clientToSvg(svgRef.current, e.clientX, e.clientY)
+      setMarquee((m) => (m ? { ...m, current: p } : m))
       return
     }
 
@@ -1227,6 +1389,28 @@ export function Canvas() {
   const onBgPointerUp = (e: React.PointerEvent) => {
     if (guideVpDragRef.current?.pointerId === e.pointerId) {
       guideVpDragRef.current = null
+      try {
+        ;(e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+      return
+    }
+
+    if (marquee?.pointerId === e.pointerId) {
+      const done = marquee
+      const rect = {
+        x: Math.min(done.start.x, done.current.x),
+        y: Math.min(done.start.y, done.current.y),
+        width: Math.abs(done.current.x - done.start.x),
+        height: Math.abs(done.current.y - done.start.y)
+      }
+      setMarquee(null)
+      if (rect.width >= 2 || rect.height >= 2) {
+        applyMarqueeSelection(rect, done.additive)
+      } else if (!done.additive) {
+        clearSelection()
+      }
       try {
         ;(e.currentTarget as SVGSVGElement).releasePointerCapture(e.pointerId)
       } catch {
@@ -1419,29 +1603,100 @@ export function Canvas() {
       ref={wrapRef}
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.code === 'Space') setSpaceDown(true)
-        if (activeTool === 'pen' && penDraft && (e.key === 'Enter' || e.code === 'Enter')) {
+        const typingUi = Boolean(
+          (e.target as HTMLElement | null)?.closest?.('input, textarea, select, [contenteditable="true"]')
+        )
+
+        if (!typingUi) {
+          const st = useEditorStore.getState()
+          const animUi = st.mode === 'animate' || st.mode === 'preview'
+
+          if (e.code === 'Space') {
+            if (animUi) {
+              e.preventDefault()
+              st.setIsPlaying(!st.isPlaying)
+            } else {
+              setSpaceDown(true)
+            }
+          }
+
+          if (animUi) {
+            if (e.code === 'Comma' || e.code === 'Period') {
+              e.preventDefault()
+              const dt = 1 / st.fps
+              if (e.code === 'Comma') {
+                st.setCurrentTime(Math.max(0, st.currentTime - dt))
+              } else {
+                st.setCurrentTime(Math.min(st.duration, st.currentTime + dt))
+              }
+            }
+            if (e.code === 'BracketLeft') {
+              e.preventDefault()
+              st.jumpToPrevKeyframe()
+            }
+            if (e.code === 'BracketRight') {
+              e.preventDefault()
+              st.jumpToNextKeyframe()
+            }
+            if (e.code === 'Home') {
+              e.preventDefault()
+              st.setCurrentTime(0)
+            }
+            if (e.code === 'End') {
+              e.preventDefault()
+              st.setCurrentTime(st.duration)
+            }
+            if ((e.metaKey || e.ctrlKey) && e.code === 'KeyC' && st.selectedKeyframes.length > 0) {
+              e.preventDefault()
+              st.copySelectedKeyframes()
+            }
+            if ((e.metaKey || e.ctrlKey) && e.code === 'KeyV' && (st.keyframeClipboard?.length ?? 0) > 0) {
+              e.preventDefault()
+              st.pasteKeyframesAtTime()
+            }
+            if (
+              st.mode === 'animate' &&
+              (e.code === 'Delete' || e.code === 'Backspace') &&
+              st.selectedKeyframes.length > 0
+            ) {
+              e.preventDefault()
+              st.deleteSelectedKeyframes()
+            }
+            if (
+              st.mode === 'animate' &&
+              (e.code === 'ArrowLeft' || e.code === 'ArrowRight') &&
+              st.selectedKeyframes.length > 0
+            ) {
+              e.preventDefault()
+              const frames = e.shiftKey ? 10 : 1
+              const dir = e.code === 'ArrowLeft' ? -1 : 1
+              st.nudgeSelectedKeyframes((frames / st.fps) * dir)
+            }
+          }
+        }
+
+        if (!typingUi && activeTool === 'pen' && penDraft && (e.key === 'Enter' || e.code === 'Enter')) {
           e.preventDefault()
           commitPenPath(penDraft.points)
           setPenDraft(null)
           penPointerRef.current = null
         }
-        if (activeTool === 'pen' && e.key === 'Escape') {
+        if (!typingUi && activeTool === 'pen' && e.key === 'Escape') {
           e.preventDefault()
           setPenDraft(null)
           penPointerRef.current = null
         }
-        if (activeTool === 'brush' && e.key === 'Escape') {
+        if (!typingUi && activeTool === 'brush' && e.key === 'Escape') {
           e.preventDefault()
           brushStrokeRef.current = null
           setBrushPreview(null)
         }
-        if (activeTool === 'pencil' && e.key === 'Escape') {
+        if (!typingUi && activeTool === 'pencil' && e.key === 'Escape') {
           e.preventDefault()
           pencilStrokeRef.current = null
           setPencilPreview(null)
         }
-        if (activeTool === 'eraser' && e.key === 'Escape') {
+        if (!typingUi && activeTool === 'eraser' && e.key === 'Escape') {
           e.preventDefault()
           eraserStrokeRef.current = null
           setEraserPreview(null)
@@ -1471,7 +1726,8 @@ export function Canvas() {
             activeTool === 'pen' ||
             activeTool === 'brush' ||
             activeTool === 'pencil' ||
-            activeTool === 'eraser'
+            activeTool === 'eraser' ||
+            activeTool === 'fill'
           ) {
             e.preventDefault()
           }
@@ -1703,6 +1959,18 @@ export function Canvas() {
           currentTime={currentTime}
           onElementPointerDown={onElementPointerDown}
         />
+        {marqueeRect && (
+          <rect
+            pointerEvents="none"
+            x={marqueeRect.x}
+            y={marqueeRect.y}
+            width={marqueeRect.width}
+            height={marqueeRect.height}
+            fill="rgba(91,141,239,0.14)"
+            stroke="#5b8def"
+            strokeDasharray="4 3"
+          />
+        )}
         {activeTool === 'path-edit' && selectedPath && (
           <g pointerEvents="none">
             <path
@@ -2197,6 +2465,76 @@ export function Canvas() {
             </label>
             <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-muted)' }}>
               Color
+              <input
+                type="color"
+                value={pencilSettings.color}
+                onChange={(e) =>
+                  setPencilSettings((s) => ({
+                    ...s,
+                    color: e.target.value
+                  }))
+                }
+                style={{ width: 44, height: 28, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
+              />
+            </label>
+          </div>
+        </div>
+      )}
+      {mode === 'draw' && activeTool === 'fill' && (
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: 12,
+            transform: 'translateX(-50%)',
+            zIndex: 11,
+            pointerEvents: 'auto'
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              background: 'var(--bg-panel)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: '8px 14px',
+              boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+              fontSize: 11,
+              color: 'var(--text-muted)'
+            }}
+          >
+            <span style={{ maxWidth: 220, lineHeight: 1.35 }}>
+              Samples the canvas as an image, flood-fills similar color from the click, then traces the region into a path.
+            </span>
+            <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+              Color tolerance
+              <input
+                type="range"
+                min={8}
+                max={120}
+                value={rasterFillOpts.tolerance}
+                onChange={(e) =>
+                  setRasterFillOpts((o) => ({ ...o, tolerance: Number(e.target.value) }))
+                }
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+              Curve simplify
+              <input
+                type="range"
+                min={0.2}
+                max={6}
+                step={0.1}
+                value={rasterFillOpts.simplifyEpsilon}
+                onChange={(e) =>
+                  setRasterFillOpts((o) => ({ ...o, simplifyEpsilon: Number(e.target.value) }))
+                }
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              Fill
               <input
                 type="color"
                 value={pencilSettings.color}

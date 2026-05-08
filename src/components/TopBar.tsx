@@ -2,9 +2,14 @@ import clsx from 'clsx'
 import type { ChangeEvent } from 'react'
 import { useRef } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faFileArrowUp } from '@fortawesome/free-solid-svg-icons'
+import { faFileArrowUp, faImage } from '@fortawesome/free-solid-svg-icons'
 import { useEditorStore } from '@/store/editorStore'
-import { applyImportedSvg, importSvgFile } from '@/ipc/fileActions'
+import {
+  applyImportedSvg,
+  importRasterTraceFile,
+  importSvgFile,
+  openRasterVectorizeWizard
+} from '@/ipc/fileActions'
 
 const modes = [
   { id: 'draw' as const, label: 'Draw' },
@@ -19,8 +24,10 @@ export function TopBar() {
   const projectName = useEditorStore((s) => s.project.name)
   const symbolEditing = useEditorStore((s) => !!s.symbolEditBackup)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const rasterInputRef = useRef<HTMLInputElement>(null)
 
   const hasElectronImport = typeof window.api?.importSvg === 'function'
+  const hasElectronRasterImport = typeof window.api?.importRaster === 'function'
 
   async function onPickSvgFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -28,6 +35,13 @@ export function TopBar() {
     if (!file) return
     const text = await file.text()
     applyImportedSvg(text, file.name)
+  }
+
+  async function onPickRasterFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    openRasterVectorizeWizard(file, file.name)
   }
 
   return (
@@ -55,6 +69,13 @@ export function TopBar() {
           style={{ display: 'none' }}
           onChange={onPickSvgFile}
         />
+        <input
+          ref={rasterInputRef}
+          type="file"
+          accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif"
+          style={{ display: 'none' }}
+          onChange={onPickRasterFile}
+        />
         <button
           type="button"
           disabled={symbolEditing}
@@ -73,6 +94,25 @@ export function TopBar() {
         >
           <FontAwesomeIcon icon={faFileArrowUp} style={{ marginRight: 6 }} />
           Import SVG…
+        </button>
+        <button
+          type="button"
+          disabled={symbolEditing}
+          title={
+            symbolEditing
+              ? 'Finish symbol editing first'
+              : hasElectronRasterImport
+                ? 'PNG / JPG / WebP → vector paths (native dialog)'
+                : 'PNG / JPG / WebP → vector paths (browser)'
+          }
+          onClick={() => {
+            if (symbolEditing) return
+            if (hasElectronRasterImport) void importRasterTraceFile()
+            else rasterInputRef.current?.click()
+          }}
+        >
+          <FontAwesomeIcon icon={faImage} style={{ marginRight: 6 }} />
+          Trace raster…
         </button>
       </div>
     </header>

@@ -33,6 +33,9 @@ export function RightInspector() {
     )
   }
 
+  /** Draw / Animate / Preview: editable; Export dialog mode: read-only. */
+  const attrsUiLocked = el.locked || mode === 'export'
+
   const tr = mergeTransformFromTracks(el.transform, el.id, tracks, currentTime)
   const fillValue = typeof el.attrs.fill === 'string' ? el.attrs.fill : '#d1d5db'
   const fillNone = fillValue === 'none' || fillValue === 'transparent'
@@ -94,7 +97,7 @@ export function RightInspector() {
     })
 
   const applyFillMode = (m: 'none' | 'solid' | 'linear' | 'radial') => {
-    if (el.locked || mode !== 'draw') return
+    if (attrsUiLocked) return
     if (m === 'none') {
       setElementAttrs(el.id, { fill: 'none' })
       return
@@ -169,7 +172,38 @@ export function RightInspector() {
     margin: '14px 0 8px'
   }
 
-  type PropKey = 'x' | 'y' | 'scaleX' | 'scaleY' | 'rotation' | 'opacity'
+  const numAttr = (key: string, fallback = 0) => {
+    const raw = el.attrs[key]
+    const n = typeof raw === 'number' ? raw : Number(raw)
+    return Number.isFinite(n) ? n : fallback
+  }
+
+  type PropKey = 'x' | 'y' | 'scaleX' | 'scaleY' | 'rotation' | 'skewX' | 'skewY' | 'opacity'
+  const transformKeysByType: Record<typeof el.type, PropKey[]> = {
+    group: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'skewX', 'skewY', 'opacity'],
+    path: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'skewX', 'skewY', 'opacity'],
+    rect: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'skewX', 'skewY', 'opacity'],
+    circle: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'skewX', 'skewY', 'opacity'],
+    ellipse: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'skewX', 'skewY', 'opacity'],
+    line: ['x', 'y', 'rotation', 'opacity'],
+    text: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'skewX', 'skewY', 'opacity'],
+    image: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'opacity'],
+    polygon: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'skewX', 'skewY', 'opacity'],
+    polyline: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'skewX', 'skewY', 'opacity'],
+    symbolInstance: ['x', 'y', 'scaleX', 'scaleY', 'rotation', 'opacity']
+  }
+  const activeTransformKeys = transformKeysByType[el.type]
+  const transformLabel: Record<PropKey, string> = {
+    x: 'X',
+    y: 'Y',
+    scaleX: 'Scale X',
+    scaleY: 'Scale Y',
+    rotation: 'Rotation',
+    skewX: 'Skew X',
+    skewY: 'Skew Y',
+    opacity: 'Opacity'
+  }
+
   const row = (label: string, key: PropKey) => (
     <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
       <span style={{ color: 'var(--text-muted)' }}>{label}</span>
@@ -177,7 +211,7 @@ export function RightInspector() {
         type="number"
         step={key === 'opacity' ? 0.05 : key === 'rotation' ? 1 : 1}
         value={Number(tr[key].toFixed(4))}
-        disabled={el.locked || mode === 'preview' || mode === 'export'}
+        disabled={el.locked || mode === 'export'}
         onChange={(e) => {
           const v = Number(e.target.value)
           if (Number.isFinite(v)) updateTransform(el.id, { [key]: v })
@@ -185,6 +219,15 @@ export function RightInspector() {
       />
     </label>
   )
+
+  const blurFx = Math.max(0, numAttr('__fxBlur', 0))
+  const shadowXFx = numAttr('__fxShadowX', 0)
+  const shadowYFx = numAttr('__fxShadowY', 0)
+  const shadowBlurFx = Math.max(0, numAttr('__fxShadowBlur', 0))
+  const shadowColorFx =
+    typeof el.attrs.__fxShadowColor === 'string' ? el.attrs.__fxShadowColor : '#000000'
+  const effectsActive =
+    blurFx > 0 || shadowBlurFx > 0 || Math.abs(shadowXFx) > 0 || Math.abs(shadowYFx) > 0
 
   const alignSelected = (
     axis: 'x' | 'y',
@@ -242,12 +285,7 @@ export function RightInspector() {
     <aside className="area-inspector">
       <div style={{ padding: 12 }}>
         <div style={{ ...sectionTitleStyle, marginTop: 0 }}>Transform</div>
-        {row('X', 'x')}
-        {row('Y', 'y')}
-        {row('Scale X', 'scaleX')}
-        {row('Scale Y', 'scaleY')}
-        {row('Rotation', 'rotation')}
-        {row('Opacity', 'opacity')}
+        {activeTransformKeys.map((key) => row(transformLabel[key], key))}
         {isSymbolInstance && (
           <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>
@@ -300,7 +338,7 @@ export function RightInspector() {
                 min={0}
                 step={1}
                 value={Number.isFinite(cornerRadiusXValue) ? cornerRadiusXValue : 0}
-                disabled={el.locked || mode !== 'draw'}
+                disabled={attrsUiLocked}
                 onChange={(e) => {
                   const v = Number(e.target.value)
                   if (Number.isFinite(v)) {
@@ -316,7 +354,7 @@ export function RightInspector() {
                 min={0}
                 step={1}
                 value={Number.isFinite(cornerRadiusYValue) ? cornerRadiusYValue : 0}
-                disabled={el.locked || mode !== 'draw'}
+                disabled={attrsUiLocked}
                 onChange={(e) => {
                   const v = Number(e.target.value)
                   if (Number.isFinite(v)) {
@@ -328,13 +366,160 @@ export function RightInspector() {
           </>
         )}
 
+        {!isSymbolInstance && (
+          <>
+            <div style={sectionTitleStyle}>Geometry</div>
+            {el.type === 'rect' && (
+              <>
+                <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Width</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={Math.max(1, numAttr('width', 1))}
+                    disabled={attrsUiLocked}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (Number.isFinite(v)) setElementAttrs(el.id, { width: Math.max(1, v) })
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Height</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={Math.max(1, numAttr('height', 1))}
+                    disabled={attrsUiLocked}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (Number.isFinite(v)) setElementAttrs(el.id, { height: Math.max(1, v) })
+                    }}
+                  />
+                </label>
+              </>
+            )}
+            {el.type === 'circle' && (
+              <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-muted)' }}>Radius</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={Math.max(1, numAttr('r', 1))}
+                  disabled={attrsUiLocked}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    if (Number.isFinite(v)) setElementAttrs(el.id, { r: Math.max(1, v) })
+                  }}
+                />
+              </label>
+            )}
+            {el.type === 'ellipse' && (
+              <>
+                <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ color: 'var(--text-muted)' }}>RX</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={Math.max(1, numAttr('rx', 1))}
+                    disabled={attrsUiLocked}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (Number.isFinite(v)) setElementAttrs(el.id, { rx: Math.max(1, v) })
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>RY</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={Math.max(1, numAttr('ry', 1))}
+                    disabled={attrsUiLocked}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (Number.isFinite(v)) setElementAttrs(el.id, { ry: Math.max(1, v) })
+                    }}
+                  />
+                </label>
+              </>
+            )}
+            {el.type === 'line' && (
+              <>
+                {(['x1', 'y1', 'x2', 'y2'] as const).map((k) => (
+                  <label key={k} style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: k !== 'y2' ? 8 : 0 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>{k.toUpperCase()}</span>
+                    <input
+                      type="number"
+                      step={1}
+                      value={numAttr(k, 0)}
+                      disabled={attrsUiLocked}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (Number.isFinite(v)) setElementAttrs(el.id, { [k]: v })
+                      }}
+                    />
+                  </label>
+                ))}
+              </>
+            )}
+            {el.type === 'image' && (
+              <>
+                <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Width</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={Math.max(1, numAttr('width', 1))}
+                    disabled={attrsUiLocked}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (Number.isFinite(v)) setElementAttrs(el.id, { width: Math.max(1, v) })
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Height</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={Math.max(1, numAttr('height', 1))}
+                    disabled={attrsUiLocked}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (Number.isFinite(v)) setElementAttrs(el.id, { height: Math.max(1, v) })
+                    }}
+                  />
+                </label>
+              </>
+            )}
+            {el.type === 'path' && (
+              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 12 }}>
+                Use Path Edit tool to change points and curves.
+              </p>
+            )}
+            {['group', 'polygon', 'polyline', 'text'].includes(el.type) && (
+              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 12 }}>
+                Use transform controls for this layer type.
+              </p>
+            )}
+          </>
+        )}
+
         {!isSymbolInstance && <div style={sectionTitleStyle}>Fill</div>}
         {canFillGradient && (
           <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
             <span style={{ color: 'var(--text-muted)' }}>Fill</span>
             <select
               value={fillMode}
-              disabled={el.locked || mode !== 'draw'}
+              disabled={attrsUiLocked}
               onChange={(e) => applyFillMode(e.target.value as 'none' | 'solid' | 'linear' | 'radial')}
             >
               <option value="none">No fill</option>
@@ -350,7 +535,7 @@ export function RightInspector() {
             <input
               type="color"
               value={solidFillHex}
-              disabled={el.locked || mode !== 'draw'}
+              disabled={attrsUiLocked}
               onChange={(e) => setElementAttrs(el.id, { fill: e.target.value })}
               style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
             />
@@ -364,7 +549,7 @@ export function RightInspector() {
                 <input
                   type="checkbox"
                   checked={fillNone}
-                  disabled={el.locked || mode !== 'draw'}
+                  disabled={attrsUiLocked}
                   onChange={(e) => {
                     if (e.target.checked) {
                       setElementAttrs(el.id, { fill: 'none' })
@@ -381,7 +566,7 @@ export function RightInspector() {
               <input
                 type="color"
                 value={fillValue.startsWith('#') ? fillValue : '#d1d5db'}
-                disabled={el.locked || mode !== 'draw' || fillNone}
+                disabled={attrsUiLocked || fillNone}
                 onChange={(e) => setElementAttrs(el.id, { fill: e.target.value })}
                 style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
               />
@@ -397,7 +582,7 @@ export function RightInspector() {
                 <input
                   type="color"
                   value={s.color.startsWith('#') ? s.color : '#888888'}
-                  disabled={el.locked || mode !== 'draw'}
+                  disabled={attrsUiLocked}
                   onChange={(e) => patchGradientStop(idx, { color: e.target.value })}
                   style={{ width: '100%', height: 28, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
                 />
@@ -410,7 +595,7 @@ export function RightInspector() {
                   type="number"
                   step={1}
                   value={activeGradient.x2}
-                  disabled={el.locked || mode !== 'draw'}
+                  disabled={attrsUiLocked}
                   onChange={(e) => {
                     const v = Number(e.target.value)
                     if (Number.isFinite(v)) patchLinearAxes({ x2: v })
@@ -427,7 +612,7 @@ export function RightInspector() {
                     min={1}
                     step={1}
                     value={activeGradient.r}
-                    disabled={el.locked || mode !== 'draw'}
+                    disabled={attrsUiLocked}
                     onChange={(e) => {
                       const v = Number(e.target.value)
                       if (Number.isFinite(v)) patchRadial({ r: Math.max(1, v) })
@@ -447,7 +632,7 @@ export function RightInspector() {
               <input
                 type="color"
                 value={strokeValue.startsWith('#') ? strokeValue : '#5b8def'}
-                disabled={el.locked || mode !== 'draw'}
+                disabled={attrsUiLocked}
                 onChange={(e) => setElementAttrs(el.id, { stroke: e.target.value })}
                 style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
               />
@@ -459,7 +644,7 @@ export function RightInspector() {
                 min={0}
                 step={0.5}
                 value={Number.isFinite(strokeWidthValue) ? strokeWidthValue : 2}
-                disabled={el.locked || mode !== 'draw'}
+                disabled={attrsUiLocked}
                 onChange={(e) => {
                   const v = Number(e.target.value)
                   if (Number.isFinite(v)) setElementAttrs(el.id, { 'stroke-width': Math.max(0, v) })
@@ -481,7 +666,7 @@ export function RightInspector() {
               <input
                 type="text"
                 value={textContent}
-                disabled={el.locked || mode !== 'draw'}
+                disabled={attrsUiLocked}
                 onChange={(e) => setElementAttrs(el.id, { __textContent: e.target.value })}
               />
             </label>
@@ -492,7 +677,7 @@ export function RightInspector() {
                 min={1}
                 step={1}
                 value={Number.isFinite(fontSizeValue) ? fontSizeValue : 24}
-                disabled={el.locked || mode !== 'draw'}
+                disabled={attrsUiLocked}
                 onChange={(e) => {
                   const v = Number(e.target.value)
                   if (Number.isFinite(v)) setElementAttrs(el.id, { 'font-size': Math.max(1, v) })
@@ -507,7 +692,7 @@ export function RightInspector() {
                 max={900}
                 step={100}
                 value={Number.isFinite(fontWeightValue) ? fontWeightValue : 400}
-                disabled={el.locked || mode !== 'draw'}
+                disabled={attrsUiLocked}
                 onChange={(e) => {
                   const v = Number(e.target.value)
                   if (Number.isFinite(v)) {
@@ -521,9 +706,95 @@ export function RightInspector() {
         )}
 
         <div style={sectionTitleStyle}>Effects</div>
-        <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 12 }}>
-          Blur, gaussian blur, and shadow controls will be added in the next pass.
-        </p>
+        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ color: 'var(--text-muted)' }}>Enabled</span>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={effectsActive}
+              disabled={attrsUiLocked}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  setElementAttrs(el.id, {
+                    __fxBlur: Math.max(blurFx, 2),
+                    __fxShadowX: shadowXFx,
+                    __fxShadowY: shadowYFx,
+                    __fxShadowBlur: Math.max(shadowBlurFx, 6),
+                    __fxShadowColor: shadowColorFx
+                  })
+                } else {
+                  setElementAttrs(el.id, { __fxBlur: 0, __fxShadowX: 0, __fxShadowY: 0, __fxShadowBlur: 0 })
+                }
+              }}
+            />
+            Apply effects
+          </label>
+        </label>
+        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ color: 'var(--text-muted)' }}>Blur</span>
+          <input
+            type="range"
+            min={0}
+            max={30}
+            step={0.5}
+            value={blurFx}
+            disabled={attrsUiLocked}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              if (Number.isFinite(v)) setElementAttrs(el.id, { __fxBlur: Math.max(0, v) })
+            }}
+          />
+        </label>
+        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ color: 'var(--text-muted)' }}>Shadow</span>
+          <input
+            type="color"
+            value={shadowColorFx.startsWith('#') ? shadowColorFx : '#000000'}
+            disabled={attrsUiLocked}
+            onChange={(e) => setElementAttrs(el.id, { __fxShadowColor: e.target.value })}
+            style={{ width: '100%', height: 28, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
+          />
+        </label>
+        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ color: 'var(--text-muted)' }}>Offset X</span>
+          <input
+            type="number"
+            step={1}
+            value={shadowXFx}
+            disabled={attrsUiLocked}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              if (Number.isFinite(v)) setElementAttrs(el.id, { __fxShadowX: v })
+            }}
+          />
+        </label>
+        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ color: 'var(--text-muted)' }}>Offset Y</span>
+          <input
+            type="number"
+            step={1}
+            value={shadowYFx}
+            disabled={attrsUiLocked}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              if (Number.isFinite(v)) setElementAttrs(el.id, { __fxShadowY: v })
+            }}
+          />
+        </label>
+        <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
+          <span style={{ color: 'var(--text-muted)' }}>Spread</span>
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            value={shadowBlurFx}
+            disabled={attrsUiLocked}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              if (Number.isFinite(v)) setElementAttrs(el.id, { __fxShadowBlur: Math.max(0, v) })
+            }}
+          />
+        </label>
 
         <div style={sectionTitleStyle}>Alignment</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>

@@ -8,10 +8,18 @@ import { SymbolsPanel } from '@/components/SymbolsPanel'
 import { TimelinePanel } from '@/components/Timeline/TimelinePanel'
 import { ExportDialog } from '@/components/ExportDialog'
 import { DialogHost } from '@/components/DialogHost'
+import { TraceOverlay } from '@/components/TraceOverlay'
 import { SymbolEditBanner } from '@/components/SymbolEditBanner'
 import { useEditorStore } from '@/store/editorStore'
 import { usePlaybackLoop } from '@/hooks/usePlaybackLoop'
-import { applyImportedSvg, importSvgFile, openProjectFile, saveProjectFile } from '@/ipc/fileActions'
+import { RasterImportModal } from '@/components/RasterImportModal'
+import {
+  applyImportedSvg,
+  importSvgFile,
+  openProjectFile,
+  openRasterVectorizeWizard,
+  saveProjectFile
+} from '@/ipc/fileActions'
 
 export default function App() {
   const mode = useEditorStore((s) => s.mode)
@@ -45,6 +53,14 @@ export default function App() {
     if (!api?.onImportSvgData) return
     return api.onImportSvgData((data) => {
       applyImportedSvg(data.content, data.path.split(/[/\\]/).pop() ?? 'Imported')
+    })
+  }, [])
+
+  useEffect(() => {
+    const api = window.api
+    if (!api?.onImportRasterData) return
+    return api.onImportRasterData((data) => {
+      openRasterVectorizeWizard(data.dataUrl, data.path.split(/[/\\]/).pop() ?? 'Image')
     })
   }, [])
 
@@ -88,6 +104,7 @@ export default function App() {
         if (key === 'n') setActiveTool('path-edit')
         if (key === 'b') setActiveTool('brush')
         if (key === 'x') setActiveTool('eraser')
+        if (key === 'f') setActiveTool('fill')
         if (key === 't') setActiveTool('text')
       }
     }
@@ -98,6 +115,8 @@ export default function App() {
   return (
     <div className="app-root">
       <DialogHost />
+      <TraceOverlay />
+      <RasterImportModal />
       <TopBar />
       <SymbolEditBanner />
       <div className="app-layout">

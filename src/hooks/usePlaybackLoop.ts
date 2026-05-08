@@ -12,7 +12,8 @@ export function usePlaybackLoop() {
     const tick = (now: number) => {
       const s = useEditorStore.getState()
       if (!s.isPlaying) return
-      const elapsed = (now - startWall) / 1000
+      const speed = Math.max(0.05, Math.min(8, s.playbackSpeed))
+      const elapsed = ((now - startWall) / 1000) * speed
       let t = startTime + elapsed
       const d = s.duration
       if (t >= d) {

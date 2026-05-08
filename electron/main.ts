@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, shell } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { registerIpcHandlers, openSvgImportDialog } from './ipc'
+import { registerIpcHandlers, openSvgImportDialog, openRasterImportDialog } from './ipc'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -59,6 +59,10 @@ function createMenu() {
           label: 'Import SVG…',
           accelerator: 'CmdOrCtrl+I',
           click: () => void openSvgImportDialog(mainWindow)
+        },
+        {
+          label: 'Import raster (trace)…',
+          click: () => void openRasterImportDialog(mainWindow)
         },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' }

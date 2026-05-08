@@ -1,9 +1,27 @@
-export type EasingId = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut'
+export type EasingId =
+  | 'linear'
+  | 'easeIn'
+  | 'easeOut'
+  | 'easeInOut'
+  | 'easeInCubic'
+  | 'easeOutCubic'
+  | 'easeInOutCubic'
+  | 'easeInBack'
+  | 'easeOutBack'
+  | 'easeInOutBack'
+
+/** Timeline UI selection (not persisted in project JSON). */
+export type KeyframeSelectionEntry = {
+  trackId: string
+  keyframeId: string
+}
 
 export type Keyframe = {
   id: string
   time: number
   value: number
+  /** Path `d` string when `property === 'pathD'`. */
+  valueText?: string
   easing?: EasingId
 }
 
@@ -16,6 +34,29 @@ export type AnimatableProperty =
   | 'opacity'
   | 'skewX'
   | 'skewY'
+  /** Packed 0xRRGGBB in `value` (use color utils). */
+  | 'fill'
+  | 'stroke'
+  | 'strokeWidth'
+  /** Path `d` uses `valueText` on each keyframe; `value` unused. */
+  | 'pathD'
+  | 'fxBlur'
+  | 'fxShadowX'
+  | 'fxShadowY'
+  | 'fxShadowBlur'
+  /** Shadow color packed like fill. */
+  | 'fxShadowColor'
+
+/** Clipboard payload for copy/paste of keyframes (relative times). */
+export type KeyframeClipboardEntry = {
+  elementId: string
+  property: AnimatableProperty
+  /** Seconds from the earliest copied keyframe time. */
+  offsetFromAnchor: number
+  value: number
+  valueText?: string
+  easing?: EasingId
+}
 
 export type AnimationTrack = {
   id: string

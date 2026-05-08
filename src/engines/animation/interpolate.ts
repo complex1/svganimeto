@@ -5,6 +5,26 @@ function sortKeyframes(kfs: Keyframe[]): Keyframe[] {
   return [...kfs].sort((a, b) => a.time - b.time)
 }
 
+const BACK_C1 = 1.70158
+
+function easeInBack(x: number): number {
+  return x * x * ((BACK_C1 + 1) * x - BACK_C1)
+}
+
+function easeOutBack(x: number): number {
+  const t = x - 1
+  return 1 + t * t * ((BACK_C1 + 1) * t + BACK_C1)
+}
+
+function easeInOutBack(x: number): number {
+  if (x < 0.5) {
+    const u = 2 * x
+    return (u * u * ((BACK_C1 + 1) * u - BACK_C1)) / 2
+  }
+  const u = 2 * x - 2
+  return (1 + u * u * ((BACK_C1 + 1) * u + BACK_C1)) / 2
+}
+
 export function applyEasing(t: number, easing: EasingId = 'linear'): number {
   const x = Math.min(1, Math.max(0, t))
   switch (easing) {
@@ -16,6 +36,18 @@ export function applyEasing(t: number, easing: EasingId = 'linear'): number {
       return 1 - (1 - x) * (1 - x)
     case 'easeInOut':
       return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2
+    case 'easeInCubic':
+      return x * x * x
+    case 'easeOutCubic':
+      return 1 - Math.pow(1 - x, 3)
+    case 'easeInOutCubic':
+      return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2
+    case 'easeInBack':
+      return easeInBack(x)
+    case 'easeOutBack':
+      return easeOutBack(x)
+    case 'easeInOutBack':
+      return easeInOutBack(x)
     default:
       return x
   }

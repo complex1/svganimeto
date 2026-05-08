@@ -251,6 +251,11 @@ input:focus {
   transform: translate(-50%, -50%) scale(1.15);
 }
 
+.keyframe-dot--selected {
+  box-shadow: 0 0 0 2px #f59e0b;
+  z-index: 2;
+}
+
 .playhead {
   position: absolute;
   top: 0;

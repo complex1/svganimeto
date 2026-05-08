@@ -2,6 +2,7 @@ import type { SVGProps } from 'react'
 import type { AnimationTrack } from '@/types/animation'
 import type { SymbolDefinition, VectorElement } from '@/types/document'
 import { mergeTransformFromTracks } from '@/engines/animation/interpolate'
+import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
 import { transformToSvgString } from '@/engines/transform/matrix'
 import { cloneSymbolTemplateForInstance } from '@/engines/document/symbolClone'
 
@@ -10,7 +11,33 @@ type Props = {
   symbols: SymbolDefinition[]
   tracks: AnimationTrack[]
   currentTime: number
-  onElementPointerDown: (id: string, shiftKey: boolean) => void
+  onElementPointerDown: (
+    id: string,
+    shiftKey: boolean,
+    clientX: number,
+    clientY: number,
+    button: number
+  ) => void
+}
+
+function readNumberAttr(attrs: Record<string, unknown>, key: string, fallback = 0): number {
+  const raw = attrs[key]
+  const n = typeof raw === 'number' ? raw : Number(raw)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function cssFilterFromAttrs(attrs: Record<string, unknown>): string | undefined {
+  const blur = Math.max(0, readNumberAttr(attrs, '__fxBlur', 0))
+  const sx = readNumberAttr(attrs, '__fxShadowX', 0)
+  const sy = readNumberAttr(attrs, '__fxShadowY', 0)
+  const sb = Math.max(0, readNumberAttr(attrs, '__fxShadowBlur', 0))
+  const sc = typeof attrs.__fxShadowColor === 'string' ? attrs.__fxShadowColor : '#000000'
+  const parts: string[] = []
+  if (blur > 0.01) parts.push(`blur(${blur.toFixed(2)}px)`)
+  if (sb > 0.01 || Math.abs(sx) > 0.01 || Math.abs(sy) > 0.01) {
+    parts.push(`drop-shadow(${sx.toFixed(2)}px ${sy.toFixed(2)}px ${sb.toFixed(2)}px ${sc})`)
+  }
+  return parts.length ? parts.join(' ') : undefined
 }
 
 function InnerShape({ el }: { el: VectorElement }) {
@@ -76,11 +103,19 @@ function El({
   symbols: SymbolDefinition[]
   tracks: AnimationTrack[]
   currentTime: number
-  onElementPointerDown: (id: string, shiftKey: boolean) => void
+  onElementPointerDown: (
+    id: string,
+    shiftKey: boolean,
+    clientX: number,
+    clientY: number,
+    button: number
+  ) => void
 }) {
   if (el.visible === false) return null
   const tr = mergeTransformFromTracks(el.transform, el.id, tracks, currentTime)
   const editorTransform = transformToSvgString(tr)
+  const mergedAttrs = mergeAttrsFromTracks(el.attrs, el.id, tracks, currentTime) as VectorElement['attrs']
+  const cssFilter = cssFilterFromAttrs(mergedAttrs as Record<string, unknown>)
 
   if (el.type === 'symbolInstance') {
     const sid = String(el.attrs.__symbolId ?? '')
@@ -92,11 +127,15 @@ function El({
         data-el-id={el.id}
         transform={editorTransform}
         opacity={tr.opacity}
-        style={{ cursor: el.locked ? 'default' : 'pointer', pointerEvents: 'auto' }}
+        style={{
+          cursor: el.locked ? 'default' : 'pointer',
+          pointerEvents: 'auto',
+          ...(cssFilter ? { filter: cssFilter } : {})
+        }}
         onPointerDown={(e) => {
           if (el.locked) return
           e.stopPropagation()
-          onElementPointerDown(el.id, e.shiftKey)
+          onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
         }}
       >
         {/*
@@ -122,18 +161,22 @@ function El({
         data-el-id={el.id}
         transform={editorTransform}
         opacity={tr.opacity}
-        style={{ cursor: el.locked ? 'default' : 'pointer', pointerEvents: 'auto' }}
+        style={{
+          cursor: el.locked ? 'default' : 'pointer',
+          pointerEvents: 'auto',
+          ...(cssFilter ? { filter: cssFilter } : {})
+        }}
         onPointerDown={(e) => {
           if (el.locked) return
           e.stopPropagation()
-          onElementPointerDown(el.id, e.shiftKey)
+          onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
         }}
       >
         {/*
           Avoid pointer-events: none on this inner wrapper — in SVG it can prevent descendants
           from receiving hits so groups (e.g. detached symbols) appear unclickable.
         */}
-        <g {...(spreadAttrs(el.attrs) as SVGProps<SVGGElement>)}>
+        <g {...(spreadAttrs(mergedAttrs as Record<string, unknown>) as SVGProps<SVGGElement>)}>
           {(el.children ?? []).map((c) => (
             <El
               key={c.id}
@@ -154,14 +197,17 @@ function El({
       data-el-id={el.id}
       transform={editorTransform}
       opacity={tr.opacity}
-      style={{ cursor: el.locked ? 'default' : 'pointer' }}
+      style={{
+        cursor: el.locked ? 'default' : 'pointer',
+        ...(cssFilter ? { filter: cssFilter } : {})
+      }}
       onPointerDown={(e) => {
         if (el.locked) return
         e.stopPropagation()
-        onElementPointerDown(el.id, e.shiftKey)
+        onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
       }}
     >
-      <InnerShape el={el} />
+      <InnerShape el={{ ...el, attrs: mergedAttrs }} />
     </g>
   )
 }
