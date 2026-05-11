@@ -1,53 +1,63 @@
 import { useEffect, useRef } from 'react'
+import gsap from 'gsap'
 import { useEditorStore } from '@/store/editorStore'
 
-/** Advances timeline while `isPlaying` is true. */
+/**
+ * Advances `currentTime` while `isPlaying` is true.
+ *
+ * Uses GSAP’s global ticker so playback shares one clock with any future GSAP timelines.
+ *
+ * Full GSAP rewrite (future): replace per-frame `mergeTransformFromTracks` / `mergeAttrsFromTracks`
+ * sampling with a `gsap.timeline()` that tweens layer proxy objects and syncs React from `onUpdate`.
+ */
 export function usePlaybackLoop() {
-  const raf = useRef(0)
+  const playFromRef = useRef(0)
+  const accumRef = useRef(0)
+  const tickRef = useRef<((time: number, deltaTime: number) => void) | null>(null)
 
   useEffect(() => {
-    let startWall = performance.now()
-    let startTime = useEditorStore.getState().currentTime
-
-    const tick = (now: number) => {
+    const tick = (_time: number, deltaTime: number) => {
       const s = useEditorStore.getState()
       if (!s.isPlaying) return
       const speed = Math.max(0.05, Math.min(8, s.playbackSpeed))
-      const elapsed = ((now - startWall) / 1000) * speed
-      let t = startTime + elapsed
-      const d = s.duration
-      if (t >= d) {
-        if (s.loop) {
-          startWall = now
-          startTime = 0
-          t = 0
-        } else {
+      accumRef.current += (deltaTime / 1000) * speed
+      const d = Math.max(1e-6, s.duration)
+      let t = playFromRef.current + accumRef.current
+
+      if (!s.loop) {
+        if (t >= d) {
           useEditorStore.setState({ isPlaying: false, currentTime: d })
           return
         }
+        useEditorStore.setState({ currentTime: t })
+        return
       }
-      useEditorStore.setState({ currentTime: Math.min(t, d) })
-      raf.current = requestAnimationFrame(tick)
+
+      t = ((t % d) + d) % d
+      useEditorStore.setState({ currentTime: t })
     }
+    tickRef.current = tick
 
     const unsub = useEditorStore.subscribe((s, prev) => {
       if (s.isPlaying && !prev.isPlaying) {
-        cancelAnimationFrame(raf.current)
-        startWall = performance.now()
-        startTime = s.currentTime
-        raf.current = requestAnimationFrame(tick)
+        playFromRef.current = s.currentTime
+        accumRef.current = 0
+        gsap.ticker.add(tick)
       }
       if (!s.isPlaying && prev.isPlaying) {
-        cancelAnimationFrame(raf.current)
+        gsap.ticker.remove(tick)
       }
     })
 
     if (useEditorStore.getState().isPlaying) {
-      raf.current = requestAnimationFrame(tick)
+      const s = useEditorStore.getState()
+      playFromRef.current = s.currentTime
+      accumRef.current = 0
+      gsap.ticker.add(tick)
     }
 
     return () => {
-      cancelAnimationFrame(raf.current)
+      if (tickRef.current) gsap.ticker.remove(tickRef.current)
       unsub()
     }
   }, [])

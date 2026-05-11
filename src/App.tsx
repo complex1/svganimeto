@@ -12,6 +12,7 @@ import { TraceOverlay } from '@/components/TraceOverlay'
 import { SymbolEditBanner } from '@/components/SymbolEditBanner'
 import { useEditorStore } from '@/store/editorStore'
 import { usePlaybackLoop } from '@/hooks/usePlaybackLoop'
+import { GsapTimelineDevPanel } from '@/components/dev/GsapTimelineDevPanel'
 import { RasterImportModal } from '@/components/RasterImportModal'
 import {
   applyImportedSvg,
@@ -114,6 +115,7 @@ export default function App() {
 
   return (
     <div className="app-root">
+      <GsapTimelineDevPanel />
       <DialogHost />
       <TraceOverlay />
       <RasterImportModal />

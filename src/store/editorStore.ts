@@ -140,6 +140,11 @@ type EditorState = {
   playbackSpeed: number
   isPlaying: boolean
   loop: boolean
+  /**
+   * Dev / migration: drive canvas + inspector from a compiled `gsap.timeline()` (see `gsapTrackCompiler`).
+   * Not persisted in project JSON.
+   */
+  gsapCanvasDriver: boolean
   mode: EditorMode
   activeTool: DrawTool
   autoKeyframe: boolean
@@ -223,6 +228,7 @@ type EditorState = {
   setPlaybackSpeed: (n: number) => void
   setLoop: (v: boolean) => void
   setIsPlaying: (v: boolean) => void
+  setGsapCanvasDriver: (v: boolean) => void
 
   updateTransform: (id: string, partial: Partial<Transform>, opts?: { skipHistory?: boolean }) => void
   setElementName: (id: string, name: string, opts?: { skipHistory?: boolean }) => void
@@ -366,6 +372,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     playbackSpeed: 1,
     isPlaying: false,
     loop: false,
+    gsapCanvasDriver: false,
     mode: 'draw',
     activeTool: 'select',
     autoKeyframe: true,
@@ -458,6 +465,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         tracks: [],
         currentTime: 0,
         playbackSpeed: 1,
+        gsapCanvasDriver: false,
         viewBox: { x: 0, y: 0, width: p.width, height: p.height },
         historyPast: [],
         historyFuture: []
@@ -666,6 +674,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     setPlaybackSpeed: (n) => set({ playbackSpeed: Math.max(0.05, Math.min(8, n)) }),
     setLoop: (v) => set({ loop: v }),
     setIsPlaying: (v) => set({ isPlaying: v }),
+    setGsapCanvasDriver: (v) => set({ gsapCanvasDriver: v }),
 
     updateTransform: (id, partial, opts) => {
       const s0 = get()
@@ -1731,6 +1740,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         selectedKeyframes: [],
         keyframeClipboard: null,
         playbackSpeed: 1,
+        gsapCanvasDriver: false,
         viewBox: { x: 0, y: 0, width: project.width, height: project.height },
         historyPast: [],
         historyFuture: []

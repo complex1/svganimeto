@@ -7,7 +7,12 @@ import { dialogAlert, dialogConfirm } from '@/store/dialogStore'
 import { ElementRenderer } from '@/components/canvas/ElementRenderer'
 import { pathDragLiveDRef } from '@/components/canvas/pathDragLivePreview'
 import { SelectionOverlay } from '@/components/canvas/SelectionOverlay'
-import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
+import {
+  disposeGsapTrackTimeline,
+  rebuildGsapTrackTimeline,
+  sampleMergedAttrsForElement,
+  syncGsapTrackTimelineTime
+} from '@/engines/animation/gsapTrackCompiler'
 import { defaultTransform, type VectorElement } from '@/types/document'
 import { flattenForLayers, updateElementById } from '@/engines/document/tree'
 import type { DrawTool } from '@/store/editorStore'
@@ -445,6 +450,8 @@ export function Canvas() {
   const viewBox = useEditorStore((s) => s.viewBox)
   const tracks = useEditorStore((s) => s.tracks)
   const currentTime = useEditorStore((s) => s.currentTime)
+  const gsapCanvasDriver = useEditorStore((s) => s.gsapCanvasDriver)
+  const duration = useEditorStore((s) => s.duration)
   const select = useEditorStore((s) => s.select)
   const addToSelection = useEditorStore((s) => s.addToSelection)
   const clearSelection = useEditorStore((s) => s.clearSelection)
@@ -482,6 +489,18 @@ export function Canvas() {
   const guideVpDragRef = useRef<{ kind: 'vp1' | 'vpL' | 'vpR' | 'vpT' | 'fish'; pointerId: number } | null>(
     null
   )
+
+  useMemo(() => {
+    if (!gsapCanvasDriver) {
+      disposeGsapTrackTimeline()
+      return
+    }
+    rebuildGsapTrackTimeline(project.elements, tracks, duration)
+  }, [gsapCanvasDriver, tracks, project.elements, duration])
+
+  useEffect(() => {
+    return () => disposeGsapTrackTimeline()
+  }, [])
 
   const [spaceDown, setSpaceDown] = useState(false)
   const [marquee, setMarquee] = useState<{
@@ -679,7 +698,9 @@ export function Canvas() {
     const el = flattenForLayers(project.elements).find((x) => x.el.id === id)?.el
     if (!el || el.type !== 'path') return null
     const animUi = mode === 'animate' || mode === 'preview'
-    const attrs = animUi ? mergeAttrsFromTracks(el.attrs, id, tracks, currentTime) : el.attrs
+    const attrs = animUi
+      ? sampleMergedAttrsForElement(el, tracks, currentTime, gsapCanvasDriver)
+      : el.attrs
     const points = Array.isArray(attrs.__pathPoints)
       ? (attrs.__pathPoints as PathPoint[])
       : typeof attrs.d === 'string'
@@ -693,7 +714,7 @@ export function Canvas() {
           ? Boolean(parsePathDToPoints(attrs.d)?.closed)
           : false
     return { id: el.id, points, closed }
-  }, [selectedIds, project.elements, tracks, currentTime, mode])
+  }, [selectedIds, project.elements, tracks, currentTime, mode, gsapCanvasDriver])
   const selectedPathNode =
     selectedPath && svgRef.current
       ? (svgRef.current.querySelector(
@@ -1627,6 +1648,8 @@ export function Canvas() {
             : 'crosshair'
       : 'default'
 
+  if (gsapCanvasDriver) syncGsapTrackTimelineTime(currentTime)
+
   return (
     <div
       className="canvas-wrap"
@@ -1987,6 +2010,7 @@ export function Canvas() {
           symbols={project.symbols}
           tracks={tracks}
           currentTime={currentTime}
+          gsapCanvasDriver={gsapCanvasDriver}
           onElementPointerDown={onElementPointerDown}
         />
         {marqueeRect && (

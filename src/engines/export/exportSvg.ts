@@ -1,3 +1,8 @@
+/**
+ * Export still samples `mergeTransformFromTracks` / `mergeAttrsFromTracks` per frame or via CSS keyframes.
+ * Next step for the GSAP migration: emit a GSAP timeline snippet or bake frames from the same compiled
+ * timeline used in dev (`gsapTrackCompiler.ts` + optional canvas driver).
+ */
 import type { Project, VectorElement } from '@/types/document'
 import type { AnimatableProperty, AnimationTrack } from '@/types/animation'
 import { transformToSvgString } from '@/engines/transform/matrix'

@@ -1,9 +1,11 @@
 import type { SVGProps } from 'react'
 import type { AnimationTrack } from '@/types/animation'
 import type { SymbolDefinition, VectorElement } from '@/types/document'
-import { mergeTransformFromTracks } from '@/engines/animation/interpolate'
 import { applyMotionPathToTransform } from '@/engines/animation/motionPathApply'
-import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
+import {
+  sampleMergedAttrsForElement,
+  sampleMergedTransformForElement
+} from '@/engines/animation/gsapTrackCompiler'
 import { transformToSvgString } from '@/engines/transform/matrix'
 import { cloneSymbolTemplateForInstance } from '@/engines/document/symbolClone'
 import { pathDragLiveDRef } from '@/components/canvas/pathDragLivePreview'
@@ -14,6 +16,7 @@ type Props = {
   symbols: SymbolDefinition[]
   tracks: AnimationTrack[]
   currentTime: number
+  gsapCanvasDriver: boolean
   onElementPointerDown: (
     id: string,
     shiftKey: boolean,
@@ -117,6 +120,7 @@ function El({
   symbols,
   tracks,
   currentTime,
+  gsapCanvasDriver,
   rootElements,
   onElementPointerDown
 }: {
@@ -124,6 +128,7 @@ function El({
   symbols: SymbolDefinition[]
   tracks: AnimationTrack[]
   currentTime: number
+  gsapCanvasDriver: boolean
   rootElements: VectorElement[]
   onElementPointerDown: (
     id: string,
@@ -134,10 +139,10 @@ function El({
   ) => void
 }) {
   if (el.visible === false) return null
-  const tr0 = mergeTransformFromTracks(el.transform, el.id, tracks, currentTime)
+  const tr0 = sampleMergedTransformForElement(el, rootElements, tracks, currentTime, gsapCanvasDriver)
   const tr = applyMotionPathToTransform(tr0, el.attrs, rootElements, tracks, el.id, currentTime)
   const editorTransform = transformToSvgString(tr)
-  const mergedAttrs = mergeAttrsFromTracks(el.attrs, el.id, tracks, currentTime) as VectorElement['attrs']
+  const mergedAttrs = sampleMergedAttrsForElement(el, tracks, currentTime, gsapCanvasDriver) as VectorElement['attrs']
   const cssFilter = combinedFilterStyle(mergedAttrs as Record<string, unknown>)
   const live = pathDragLiveDRef.current
   const mergedForShape =
@@ -178,6 +183,7 @@ function El({
           symbols={symbols}
           tracks={tracks}
           currentTime={currentTime}
+          gsapCanvasDriver={gsapCanvasDriver}
           rootElements={rootElements}
           onElementPointerDown={onElementPointerDown}
         />
@@ -214,6 +220,7 @@ function El({
               symbols={symbols}
               tracks={tracks}
               currentTime={currentTime}
+              gsapCanvasDriver={gsapCanvasDriver}
               rootElements={rootElements}
               onElementPointerDown={onElementPointerDown}
             />
@@ -248,6 +255,7 @@ export function ElementRenderer({
   symbols,
   tracks,
   currentTime,
+  gsapCanvasDriver,
   onElementPointerDown
 }: Props) {
   return (
@@ -259,6 +267,7 @@ export function ElementRenderer({
           symbols={symbols}
           tracks={tracks}
           currentTime={currentTime}
+          gsapCanvasDriver={gsapCanvasDriver}
           rootElements={elements}
           onElementPointerDown={onElementPointerDown}
         />

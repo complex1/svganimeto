@@ -2,8 +2,11 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { nanoid } from 'nanoid'
 import { useEditorStore } from '@/store/editorStore'
 import { flattenForLayers } from '@/engines/document/tree'
-import { mergeTransformFromTracks, sampleTrack } from '@/engines/animation/interpolate'
-import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
+import { sampleTrack } from '@/engines/animation/interpolate'
+import {
+  sampleMergedAttrsForElement,
+  sampleMergedTransformForElement
+} from '@/engines/animation/gsapTrackCompiler'
 import type { AnimationTrack } from '@/types/animation'
 import type { VectorElement } from '@/types/document'
 import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
@@ -14,11 +17,12 @@ function mergedPathDForLayer(
   roots: VectorElement[],
   tracks: AnimationTrack[],
   pathLayerId: string,
-  timeSec: number
+  timeSec: number,
+  useGsapDriver: boolean
 ): string {
   const node = flattenForLayers(roots).find((x) => x.el.id === pathLayerId)?.el
   if (!node || node.type !== 'path') return ''
-  const attrs = mergeAttrsFromTracks(node.attrs, pathLayerId, tracks, timeSec)
+  const attrs = sampleMergedAttrsForElement(node, tracks, timeSec, useGsapDriver)
   const d = attrs.d
   return typeof d === 'string' && d.trim().length > 0 ? d : ''
 }
@@ -41,6 +45,7 @@ export function RightInspector() {
   const symbolEditing = useEditorStore((s) => !!s.symbolEditBackup)
   const beginSymbolEdit = useEditorStore((s) => s.beginSymbolEdit)
   const detachSymbolInstance = useEditorStore((s) => s.detachSymbolInstance)
+  const gsapCanvasDriver = useEditorStore((s) => s.gsapCanvasDriver)
 
   const id = selectedIds[0]
   const el = id ? flattenForLayers(elements).find((x) => x.el.id === id)?.el : undefined
@@ -65,7 +70,7 @@ export function RightInspector() {
   /** Draw / Animate / Preview: editable; Export dialog mode: read-only. */
   const attrsUiLocked = el.locked || mode === 'export'
 
-  const tr = mergeTransformFromTracks(el.transform, el.id, tracks, currentTime)
+  const tr = sampleMergedTransformForElement(el, elements, tracks, currentTime, gsapCanvasDriver)
   const fillValue = typeof el.attrs.fill === 'string' ? el.attrs.fill : '#d1d5db'
   const fillNone = fillValue === 'none' || fillValue === 'transparent'
   const fillUrlMatch =
@@ -797,10 +802,10 @@ export function RightInspector() {
                     {(() => {
                       const canKey = mode === 'animate' || mode === 'preview'
                       const pathDTrack = tracks.find((t) => t.elementId === el.id && t.property === 'pathD')
-                      const dSelf0 = mergedPathDForLayer(elements, tracks, el.id, 0)
+                      const dSelf0 = mergedPathDForLayer(elements, tracks, el.id, 0, gsapCanvasDriver)
                       const dTargetEnd =
                         morphTargetPathId.length > 0
-                          ? mergedPathDForLayer(elements, tracks, morphTargetPathId, duration)
+                          ? mergedPathDForLayer(elements, tracks, morphTargetPathId, duration, gsapCanvasDriver)
                           : ''
                       const replacePathDMorphKeys = (next: { time: number; valueText: string }[]) => {
                         const others = useEditorStore
@@ -825,10 +830,10 @@ export function RightInspector() {
                           }
                         ])
                       }
-                      const dSelfAtPlayhead = mergedPathDForLayer(elements, tracks, el.id, currentTime)
+                      const dSelfAtPlayhead = mergedPathDForLayer(elements, tracks, el.id, currentTime, gsapCanvasDriver)
                       const dTargetAtPlayhead =
                         morphTargetPathId.length > 0
-                          ? mergedPathDForLayer(elements, tracks, morphTargetPathId, currentTime)
+                          ? mergedPathDForLayer(elements, tracks, morphTargetPathId, currentTime, gsapCanvasDriver)
                           : ''
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
