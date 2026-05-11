@@ -9,10 +9,11 @@ import {
   faPlus,
   faTrashCan
 } from '@fortawesome/free-solid-svg-icons'
+import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import { dialogPrompt } from '@/store/dialogStore'
 
-export function SymbolsPanel({ expanded }: { expanded?: boolean }) {
+export function SymbolsPanel() {
   const symbols = useEditorStore((s) => s.project.symbols)
   const symbolEditing = useEditorStore((s) => !!s.symbolEditBackup)
   const createSymbolFromSelection = useEditorStore((s) => s.createSymbolFromSelection)
@@ -37,30 +38,21 @@ export function SymbolsPanel({ expanded }: { expanded?: boolean }) {
   }
 
   return (
-    <div
-      style={{
-        width: expanded ? undefined : 220,
-        flex: expanded ? 1 : undefined,
-        minWidth: 200,
-        borderRight: '1px solid var(--border)',
-        overflow: 'auto',
-        display: 'flex',
-        flexDirection: 'column'
-      }}
-    >
+    <div className="dock-panel-inner dock-panel-inner--column">
       <div className="panel-section-title">Symbols</div>
       <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--border)' }}>
-        <button
-          type="button"
-          className="toolbar-btn"
-          disabled={symbolEditing}
-          title={symbolEditing ? 'Finish symbol editing on the banner first' : undefined}
-          style={{ width: '100%', justifyContent: 'center', gap: 6 }}
-          onClick={onCreate}
-        >
-          <FontAwesomeIcon icon={faPlus} />
-          Create from selection
-        </button>
+        <Tooltip content={symbolEditing ? 'Finish symbol editing on the banner first' : undefined}>
+          <button
+            type="button"
+            className="toolbar-btn"
+            disabled={symbolEditing}
+            style={{ width: '100%', justifyContent: 'center', gap: 6 }}
+            onClick={onCreate}
+          >
+            <FontAwesomeIcon icon={faPlus} />
+            Create from selection
+          </button>
+        </Tooltip>
       </div>
       <ul className="layers-tree" style={{ flex: 1 }}>
         {symbolEditing && (
@@ -94,9 +86,9 @@ export function SymbolsPanel({ expanded }: { expanded?: boolean }) {
             <span style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {sym.name}
             </span>
+            <Tooltip content={symbolEditing ? 'Finish symbol editing first' : 'Place instance'}>
             <button
               type="button"
-              title={symbolEditing ? 'Finish symbol editing first' : 'Place instance'}
               disabled={symbolEditing}
               style={{
                 width: 22,
@@ -115,9 +107,10 @@ export function SymbolsPanel({ expanded }: { expanded?: boolean }) {
             >
               <FontAwesomeIcon icon={faClone} />
             </button>
+            </Tooltip>
+            <Tooltip content={symbolEditing ? 'Finish symbol editing first' : 'Edit symbol master on isolated canvas'}>
             <button
               type="button"
-              title={symbolEditing ? 'Finish symbol editing first' : 'Edit symbol master on isolated canvas'}
               disabled={symbolEditing}
               style={{
                 width: 22,
@@ -136,11 +129,12 @@ export function SymbolsPanel({ expanded }: { expanded?: boolean }) {
             >
               <FontAwesomeIcon icon={faPen} />
             </button>
+            </Tooltip>
+            <Tooltip
+              content={symbolEditing ? 'Finish symbol editing first' : 'Replace master from top-level selection'}
+            >
             <button
               type="button"
-              title={
-                symbolEditing ? 'Finish symbol editing first' : 'Replace master from top-level selection'
-              }
               disabled={symbolEditing}
               style={{
                 width: 22,
@@ -159,9 +153,10 @@ export function SymbolsPanel({ expanded }: { expanded?: boolean }) {
             >
               <FontAwesomeIcon icon={faPenToSquare} />
             </button>
+            </Tooltip>
+            <Tooltip content={symbolEditing ? 'Finish symbol editing first' : 'Delete symbol (removes instances)'}>
             <button
               type="button"
-              title={symbolEditing ? 'Finish symbol editing first' : 'Delete symbol (removes instances)'}
               disabled={symbolEditing}
               style={{
                 width: 22,
@@ -182,6 +177,7 @@ export function SymbolsPanel({ expanded }: { expanded?: boolean }) {
             >
               <FontAwesomeIcon icon={faTrashCan} />
             </button>
+            </Tooltip>
           </li>
         ))}
       </ul>

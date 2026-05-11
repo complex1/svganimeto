@@ -5,6 +5,7 @@ import { faChevronDown, faChevronRight, faEye, faEyeSlash } from '@fortawesome/f
 import { useEditorStore } from '@/store/editorStore'
 import { dialogAlert, dialogConfirm } from '@/store/dialogStore'
 import { ElementRenderer } from '@/components/canvas/ElementRenderer'
+import { Tooltip } from '@/components/Tooltip'
 import { pathDragLiveDRef } from '@/components/canvas/pathDragLivePreview'
 import { SelectionOverlay } from '@/components/canvas/SelectionOverlay'
 import {
@@ -513,6 +514,7 @@ export function Canvas() {
     tool: Exclude<
       DrawTool,
       | 'select'
+      | 'hand'
       | 'shape-builder'
       | 'text'
       | 'pen'
@@ -1015,6 +1017,7 @@ export function Canvas() {
 
   const onElementPointerDown = useCallback(
     (id: string, shiftKey: boolean, clientX: number, clientY: number, button: number) => {
+      if (activeTool === 'hand') return
       const clicked = flattenForLayers(useEditorStore.getState().project.elements).find((x) => x.el.id === id)?.el
       if (
         mode === 'draw' &&
@@ -1230,6 +1233,7 @@ export function Canvas() {
         tool: activeTool as Exclude<
           DrawTool,
           | 'select'
+          | 'hand'
           | 'shape-builder'
           | 'text'
           | 'pen'
@@ -1246,7 +1250,7 @@ export function Canvas() {
       return
     }
 
-    if (e.button === 1 || spaceDown) {
+    if (e.button === 1 || spaceDown || (activeTool === 'hand' && isLeft)) {
       panning.current = { x: e.clientX, y: e.clientY }
       ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
       return
@@ -1636,17 +1640,21 @@ export function Canvas() {
   }
 
   const canvasCursor =
-    (mode === 'draw' || activeTool === 'path-edit') &&
-    activeTool !== 'select' &&
-    activeTool !== 'shape-builder'
-      ? activeTool === 'text'
-        ? 'text'
-        : activeTool === 'path-edit'
-          ? 'default'
-          : activeTool === 'eraser'
-            ? 'cell'
-            : 'crosshair'
-      : 'default'
+    activeTool === 'hand'
+      ? panning.current
+        ? 'grabbing'
+        : 'grab'
+      : (mode === 'draw' || activeTool === 'path-edit') &&
+          activeTool !== 'select' &&
+          activeTool !== 'shape-builder'
+        ? activeTool === 'text'
+          ? 'text'
+          : activeTool === 'path-edit'
+            ? 'default'
+            : activeTool === 'eraser'
+              ? 'cell'
+              : 'crosshair'
+        : 'default'
 
   if (gsapCanvasDriver) syncGsapTrackTimelineTime(currentTime)
 
@@ -2011,6 +2019,7 @@ export function Canvas() {
           tracks={tracks}
           currentTime={currentTime}
           gsapCanvasDriver={gsapCanvasDriver}
+          activeTool={activeTool}
           onElementPointerDown={onElementPointerDown}
         />
         {marqueeRect && (
@@ -2332,9 +2341,9 @@ export function Canvas() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Tooltip content={canvasGuidePanelCollapsed ? 'Expand guides panel' : 'Collapse panel'}>
               <button
                 type="button"
-                title={canvasGuidePanelCollapsed ? 'Expand guides panel' : 'Collapse panel'}
                 onClick={() => setCanvasGuidePanelCollapsed(!canvasGuidePanelCollapsed)}
                 style={{
                   width: 32,
@@ -2352,9 +2361,10 @@ export function Canvas() {
               >
                 <FontAwesomeIcon icon={canvasGuidePanelCollapsed ? faChevronRight : faChevronDown} />
               </button>
+              </Tooltip>
+              <Tooltip content={canvasGuideOverlayVisible ? 'Hide grid overlay' : 'Show grid overlay'}>
               <button
                 type="button"
-                title={canvasGuideOverlayVisible ? 'Hide grid overlay' : 'Show grid overlay'}
                 onClick={() => setCanvasGuideOverlayVisible(!canvasGuideOverlayVisible)}
                 style={{
                   width: 32,
@@ -2372,8 +2382,9 @@ export function Canvas() {
               >
                 <FontAwesomeIcon icon={canvasGuideOverlayVisible ? faEye : faEyeSlash} />
               </button>
+              </Tooltip>
+              <Tooltip content="Grid line color">
               <label
-                title="Grid line color"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -2390,6 +2401,7 @@ export function Canvas() {
                   style={{ width: 32, height: 28, padding: 0, border: '1px solid var(--border)', borderRadius: 6 }}
                 />
               </label>
+              </Tooltip>
             </div>
 
             {!canvasGuidePanelCollapsed && (

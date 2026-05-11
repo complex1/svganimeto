@@ -71,12 +71,18 @@ export function removeElementById(roots: VectorElement[], id: string): VectorEle
   return filterWalk(roots)
 }
 
-export function flattenForLayers(roots: VectorElement[], depth = 0): { el: VectorElement; depth: number }[] {
+export function flattenForLayers(
+  roots: VectorElement[],
+  depth = 0,
+  /** When set, group ids in this set are shown collapsed (children omitted from the list). */
+  collapsedGroupIds?: ReadonlySet<string> | null
+): { el: VectorElement; depth: number }[] {
   const out: { el: VectorElement; depth: number }[] = []
   for (const el of roots) {
     out.push({ el, depth })
-    if (el.children?.length) {
-      out.push(...flattenForLayers(el.children, depth + 1))
+    const collapsed = collapsedGroupIds?.has(el.id)
+    if (el.children?.length && !collapsed) {
+      out.push(...flattenForLayers(el.children, depth + 1, collapsedGroupIds))
     }
   }
   return out

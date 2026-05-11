@@ -1,11 +1,19 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+export type SaveExportPayload = {
+  encoding: 'utf8' | 'base64'
+  data: string
+  defaultFileName: string
+  filters?: { name: string; extensions: string[] }[]
+}
+
 export type ElectronAPI = {
   openProject: () => Promise<{ path: string; content: string } | null>
   saveProject: (content: string, suggestedName?: string) => Promise<string | null>
   importSvg: () => Promise<{ path: string; content: string } | null>
   importRaster: () => Promise<{ path: string; dataUrl: string } | null>
   exportSvg: (content: string, suggestedName?: string) => Promise<string | null>
+  saveExport: (payload: SaveExportPayload) => Promise<string | null>
   onMenuAction: (callback: (action: string) => void) => () => void
   /** Fired when Import completes in the main process (menu / shortcut). */
   onImportSvgData: (callback: (data: { path: string; content: string }) => void) => () => void
@@ -44,6 +52,7 @@ const api: ElectronAPI = {
   importSvg: () => ipcRenderer.invoke('dialog:importSvg'),
   importRaster: () => ipcRenderer.invoke('dialog:importRaster'),
   exportSvg: (content, suggestedName) => ipcRenderer.invoke('dialog:exportSvg', content, suggestedName),
+  saveExport: (payload) => ipcRenderer.invoke('dialog:saveExport', payload),
   onMenuAction: (callback) => {
     const handler = (_: Electron.IpcRendererEvent, action: string) => callback(action)
     ipcRenderer.on('menu:action', handler)

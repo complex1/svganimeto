@@ -5,7 +5,7 @@
  */
 import type { Project, VectorElement } from '@/types/document'
 import type { AnimatableProperty, AnimationTrack } from '@/types/animation'
-import { transformToSvgString } from '@/engines/transform/matrix'
+import { transformToCssTransformValue, transformToSvgString } from '@/engines/transform/matrix'
 import { mergeTransformFromTracks } from '@/engines/animation/interpolate'
 import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
 import { applyMotionPathToTransform } from '@/engines/animation/motionPathApply'
@@ -196,7 +196,7 @@ function buildKeyframesCss(
       const pct = durationSec > 0 ? ((time / durationSec) * 100).toFixed(4) : '0'
       let mergedT = mergeTransformFromTracks(el.transform, el.id, tracks, time)
       mergedT = applyMotionPathToTransform(mergedT, el.attrs, elements, tracks, el.id, time)
-      const tr = transformToSvgString(mergedT)
+      const tr = transformToCssTransformValue(mergedT)
       const op = mergedT.opacity !== 1 ? `opacity:${mergedT.opacity};` : ''
       const mergedAttrs = mergeAttrsFromTracks(el.attrs, el.id, tracks, time) as Record<string, unknown>
       const fxOnly = effectStyleFromAttrs(attrsWithoutSvgFilterUrl(mergedAttrs))

@@ -9,6 +9,7 @@ import {
 import { transformToSvgString } from '@/engines/transform/matrix'
 import { cloneSymbolTemplateForInstance } from '@/engines/document/symbolClone'
 import { pathDragLiveDRef } from '@/components/canvas/pathDragLivePreview'
+import type { DrawTool } from '@/store/editorStore'
 
 type Props = {
   /** Root layers (used for motion-path target lookup). */
@@ -17,6 +18,7 @@ type Props = {
   tracks: AnimationTrack[]
   currentTime: number
   gsapCanvasDriver: boolean
+  activeTool: DrawTool
   onElementPointerDown: (
     id: string,
     shiftKey: boolean,
@@ -115,6 +117,11 @@ function spreadAttrs(attrs: Record<string, unknown>): Record<string, unknown> {
   return out
 }
 
+function elementCursor(activeTool: DrawTool, locked: boolean | undefined) {
+  if (activeTool === 'hand') return 'grab'
+  return locked ? 'default' : 'pointer'
+}
+
 function El({
   el,
   symbols,
@@ -122,6 +129,7 @@ function El({
   currentTime,
   gsapCanvasDriver,
   rootElements,
+  activeTool,
   onElementPointerDown
 }: {
   el: VectorElement
@@ -130,6 +138,7 @@ function El({
   currentTime: number
   gsapCanvasDriver: boolean
   rootElements: VectorElement[]
+  activeTool: DrawTool
   onElementPointerDown: (
     id: string,
     shiftKey: boolean,
@@ -162,12 +171,13 @@ function El({
         transform={editorTransform}
         opacity={tr.opacity}
         style={{
-          cursor: el.locked ? 'default' : 'pointer',
+          cursor: elementCursor(activeTool, el.locked),
           pointerEvents: 'auto',
           ...(cssFilter ? { filter: cssFilter } : {})
         }}
         onPointerDown={(e) => {
           if (el.locked) return
+          if (activeTool === 'hand') return
           e.stopPropagation()
           onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
         }}
@@ -185,6 +195,7 @@ function El({
           currentTime={currentTime}
           gsapCanvasDriver={gsapCanvasDriver}
           rootElements={rootElements}
+          activeTool={activeTool}
           onElementPointerDown={onElementPointerDown}
         />
       </g>
@@ -198,12 +209,13 @@ function El({
         transform={editorTransform}
         opacity={tr.opacity}
         style={{
-          cursor: el.locked ? 'default' : 'pointer',
+          cursor: elementCursor(activeTool, el.locked),
           pointerEvents: 'auto',
           ...(cssFilter ? { filter: cssFilter } : {})
         }}
         onPointerDown={(e) => {
           if (el.locked) return
+          if (activeTool === 'hand') return
           e.stopPropagation()
           onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
         }}
@@ -222,6 +234,7 @@ function El({
               currentTime={currentTime}
               gsapCanvasDriver={gsapCanvasDriver}
               rootElements={rootElements}
+              activeTool={activeTool}
               onElementPointerDown={onElementPointerDown}
             />
           ))}
@@ -236,11 +249,12 @@ function El({
       transform={editorTransform}
       opacity={tr.opacity}
       style={{
-        cursor: el.locked ? 'default' : 'pointer',
+        cursor: elementCursor(activeTool, el.locked),
         ...(cssFilter ? { filter: cssFilter } : {})
       }}
       onPointerDown={(e) => {
         if (el.locked) return
+        if (activeTool === 'hand') return
         e.stopPropagation()
         onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
       }}
@@ -256,6 +270,7 @@ export function ElementRenderer({
   tracks,
   currentTime,
   gsapCanvasDriver,
+  activeTool,
   onElementPointerDown
 }: Props) {
   return (
@@ -269,6 +284,7 @@ export function ElementRenderer({
           currentTime={currentTime}
           gsapCanvasDriver={gsapCanvasDriver}
           rootElements={elements}
+          activeTool={activeTool}
           onElementPointerDown={onElementPointerDown}
         />
       ))}

@@ -24,6 +24,8 @@ import {
   mergeAttrsFromTracks
 } from '@/engines/animation/attrAnimation'
 import { importSvgString } from '@/engines/importer/svgImporter'
+import { duplicateSelectedInDocument } from '@/engines/document/duplicateElements'
+import { groupSelectedElements } from '@/engines/document/groupElements'
 import {
   findAncestorChain,
   findElement,
@@ -53,6 +55,7 @@ import type { CanvasGuideType, GuidePointNorm } from '@/types/canvasGuide'
 export type EditorMode = 'draw' | 'animate' | 'preview' | 'export'
 export type DrawTool =
   | 'select'
+  | 'hand'
   | 'shape-builder'
   | 'rect'
   | 'circle'
@@ -197,6 +200,8 @@ type EditorState = {
   importRasterManualReference: (dataUrl: string, width: number, height: number, projectName: string) => void
   setElements: (elements: VectorElement[], opts?: { skipHistory?: boolean }) => void
   setProjectMeta: (partial: Partial<Pick<Project, 'name' | 'width' | 'height'>>, opts?: { skipHistory?: boolean }) => void
+  /** Artboard size; resets viewBox to the full canvas (0,0,w,h). */
+  setCanvasSize: (width: number, height: number, opts?: { skipHistory?: boolean }) => void
 
   select: (ids: string[]) => void
   addToSelection: (id: string) => void
@@ -242,6 +247,10 @@ type EditorState = {
   reorderLayers: (dragId: string, targetId: string, place: 'before' | 'after', opts?: { skipHistory?: boolean }) => void
   deleteSelected: (opts?: { skipHistory?: boolean }) => void
   deleteLayerById: (id: string, opts?: { skipHistory?: boolean }) => void
+  /** Wraps 2+ selected sibling layers in a new group (preserves child ids and tracks). */
+  groupSelection: () => void
+  /** Clones selected layer roots (new ids); copies tracks; inserts copies after originals. */
+  duplicateSelection: () => void
   addElement: (element: VectorElement, opts?: { skipHistory?: boolean; select?: boolean }) => void
 
   ensureTrack: (elementId: string, property: AnimatableProperty) => string
@@ -384,7 +393,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     canvasGuideOpacity: 0.28,
     canvasGuideColor: '#94a3b8',
     canvasGuideOverlayVisible: true,
-    canvasGuidePanelCollapsed: false,
+    canvasGuidePanelCollapsed: true,
     canvasGuideHorizon: 0.52,
     canvasGuideVp1: { nx: 0.5, ny: 0.52 },
     canvasGuideVpLeft: { nx: -0.35, ny: 0.52 },
@@ -574,6 +583,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
         opts
       ),
 
+    setCanvasSize: (width, height, opts) => {
+      const w = Math.max(1, Math.round(width))
+      const h = Math.max(1, Math.round(height))
+      withHistory(
+        (s) => ({
+          project: { ...s.project, width: w, height: h },
+          viewBox: { x: 0, y: 0, width: w, height: h }
+        }),
+        opts
+      )
+    },
+
     select: (ids) => set({ selectedIds: ids, selectedKeyframes: [] }),
     addToSelection: (id) =>
       set((s) => ({
@@ -586,7 +607,12 @@ export const useEditorStore = create<EditorState>((set, get) => {
       set((s) => {
         let nextTool = s.activeTool
         if (m === 'export') nextTool = 'select'
-        else if ((m === 'animate' || m === 'preview') && nextTool !== 'select' && nextTool !== 'path-edit') {
+        else if (
+          (m === 'animate' || m === 'preview') &&
+          nextTool !== 'select' &&
+          nextTool !== 'hand' &&
+          nextTool !== 'path-edit'
+        ) {
           nextTool = 'select'
         }
         return {
@@ -892,6 +918,37 @@ export const useEditorStore = create<EditorState>((set, get) => {
         }),
         opts
       ),
+
+    groupSelection: () => {
+      const s0 = get()
+      if (s0.mode === 'preview' || s0.mode === 'export') return
+      const result = groupSelectedElements(s0.project.elements, s0.selectedIds)
+      if (!result) {
+        void dialogAlert(
+          'Select two or more sibling layers (same folder or root). Locked layers and symbol instances cannot be grouped.'
+        )
+        return
+      }
+      withHistory(() => ({
+        project: { ...s0.project, elements: result.roots },
+        selectedIds: [result.groupId],
+        selectedKeyframes: []
+      }))
+    },
+
+    duplicateSelection: () => {
+      const s0 = get()
+      if (s0.mode === 'preview' || s0.mode === 'export') return
+      if (s0.selectedIds.length === 0) return
+      const result = duplicateSelectedInDocument(s0.project.elements, s0.selectedIds, s0.tracks)
+      if (!result || result.newSelectedIds.length === 0) return
+      withHistory(() => ({
+        project: { ...s0.project, elements: result.roots },
+        tracks: result.tracks,
+        selectedIds: result.newSelectedIds,
+        selectedKeyframes: []
+      }))
+    },
 
     addElement: (element, opts) =>
       withHistory(

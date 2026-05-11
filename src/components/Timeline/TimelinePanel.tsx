@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faPause, faPlay, faRepeat, faStop } from '@fortawesome/free-solid-svg-icons'
+import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import type { AnimatableProperty, AnimationTrack, EasingId } from '@/types/animation'
 
@@ -363,14 +364,15 @@ export function TimelinePanel() {
           <input type="checkbox" checked={snapToFrame} onChange={(e) => setSnapToFrame(e.target.checked)} />
           Snap
         </label>
-        <button
-          type="button"
-          title="Toggle ruler: seconds vs frames"
-          onClick={() => setRulerMode((m) => (m === 'seconds' ? 'frames' : 'seconds'))}
-          style={{ fontSize: 11, padding: '2px 8px' }}
-        >
-          Ruler: {rulerMode === 'seconds' ? 's' : 'f'}
-        </button>
+        <Tooltip content="Toggle ruler: seconds vs frames">
+          <button
+            type="button"
+            onClick={() => setRulerMode((m) => (m === 'seconds' ? 'frames' : 'seconds'))}
+            style={{ fontSize: 11, padding: '2px 8px' }}
+          >
+            Ruler: {rulerMode === 'seconds' ? 's' : 'f'}
+          </button>
+        </Tooltip>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
           Speed
           <select
@@ -535,9 +537,9 @@ export function TimelinePanel() {
         ) : (
           rows.map(({ track, label }) => (
             <div key={track.id} className="track-row">
-              <div className="track-label" title={label}>
-                {label}
-              </div>
+              <Tooltip content={label} anchorClassName="tooltip-anchor--block" anchorStyle={{ width: '100%', minWidth: 0 }}>
+                <div className="track-label">{label}</div>
+              </Tooltip>
               <div
                 className="track-lane"
                 style={{ position: 'relative', minWidth: duration * pxPerSec }}
@@ -558,35 +560,37 @@ export function TimelinePanel() {
                     }}
                   />
                 )}
-                {track.keyframes.map((k) => (
-                  <div
-                    key={k.id}
-                    className={`keyframe-dot${selectedKfSet.has(selectionKey(track.id, k.id)) ? ' keyframe-dot--selected' : ''}`}
-                    style={{ left: k.time * pxPerSec }}
-                    title={
-                      k.valueText !== undefined
-                        ? `${k.time}s — ${k.value} — ${k.valueText.length > 48 ? `${k.valueText.slice(0, 48)}…` : k.valueText}`
-                        : `${k.time}s — ${k.value}`
-                    }
-                    onPointerDown={(e) => beginKeyframeDrag(e, track, k)}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      setKeyframeMenu({
-                        left: e.clientX,
-                        top: e.clientY,
-                        trackId: track.id,
-                        elementId: track.elementId,
-                        property: track.property,
-                        keyframeId: k.id,
-                        time: k.time,
-                        value: k.value,
-                        valueText: k.valueText,
-                        easing: k.easing
-                      })
-                    }}
-                  />
-                ))}
+                {track.keyframes.map((k) => {
+                  const keyframeTooltip =
+                    k.valueText !== undefined
+                      ? `${k.time}s — ${k.value} — ${k.valueText.length > 48 ? `${k.valueText.slice(0, 48)}…` : k.valueText}`
+                      : `${k.time}s — ${k.value}`
+                  return (
+                    <Tooltip key={k.id} content={keyframeTooltip}>
+                      <div
+                        className={`keyframe-dot${selectedKfSet.has(selectionKey(track.id, k.id)) ? ' keyframe-dot--selected' : ''}`}
+                        style={{ left: k.time * pxPerSec }}
+                        onPointerDown={(e) => beginKeyframeDrag(e, track, k)}
+                        onContextMenu={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setKeyframeMenu({
+                            left: e.clientX,
+                            top: e.clientY,
+                            trackId: track.id,
+                            elementId: track.elementId,
+                            property: track.property,
+                            keyframeId: k.id,
+                            time: k.time,
+                            value: k.value,
+                            valueText: k.valueText,
+                            easing: k.easing
+                          })
+                        }}
+                      />
+                    </Tooltip>
+                  )
+                })}
               </div>
             </div>
           ))

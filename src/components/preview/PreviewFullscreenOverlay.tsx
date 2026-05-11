@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faPause, faPlay, faRepeat, faStop, faXmark } from '@fortawesome/free-solid-svg-icons'
+import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import { ElementRenderer } from '@/components/canvas/ElementRenderer'
 import {
@@ -91,9 +92,9 @@ export function PreviewFullscreenOverlay() {
           background: 'var(--bg-panel, #22262e)'
         }}
       >
+        <Tooltip content="Back to editor (Esc)">
         <button
           type="button"
-          title="Back to editor (Esc)"
           onClick={() => setMode('animate')}
           style={{
             display: 'flex',
@@ -109,6 +110,7 @@ export function PreviewFullscreenOverlay() {
           <FontAwesomeIcon icon={faXmark} />
           Exit preview
         </button>
+        </Tooltip>
         <span style={{ fontSize: 12, color: 'var(--text-muted, #9aa0a6)' }}>
           {project.name} · {formatTime(currentTime)} / {formatTime(duration)}
         </span>

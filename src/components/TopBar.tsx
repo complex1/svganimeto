@@ -1,8 +1,9 @@
 import clsx from 'clsx'
-import type { ChangeEvent } from 'react'
-import { useRef } from 'react'
+import type { ChangeEvent, KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faFileArrowUp, faImage } from '@fortawesome/free-solid-svg-icons'
+import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import {
   applyImportedSvg,
@@ -18,13 +19,77 @@ const modes = [
   { id: 'export' as const, label: 'Export' }
 ]
 
+const CANVAS_SIZE_PRESETS = [
+  { width: 800, height: 600, label: '800 × 600' },
+  { width: 1280, height: 720, label: '1280 × 720 (HD)' },
+  { width: 1920, height: 1080, label: '1920 × 1080 (FHD)' },
+  { width: 3840, height: 2160, label: '3840 × 2160 (4K)' },
+  { width: 1080, height: 1080, label: '1080 × 1080 (square)' },
+  { width: 1080, height: 1920, label: '1080 × 1920 (portrait)' },
+  { width: 512, height: 512, label: '512 × 512' }
+] as const
+
 export function TopBar() {
   const mode = useEditorStore((s) => s.mode)
   const setMode = useEditorStore((s) => s.setMode)
   const projectName = useEditorStore((s) => s.project.name)
+  const setProjectMeta = useEditorStore((s) => s.setProjectMeta)
+  const projectWidth = useEditorStore((s) => s.project.width)
+  const projectHeight = useEditorStore((s) => s.project.height)
+  const setCanvasSize = useEditorStore((s) => s.setCanvasSize)
   const symbolEditing = useEditorStore((s) => !!s.symbolEditBackup)
+  const canvasSizeLocked = symbolEditing || mode === 'preview' || mode === 'export'
+  const canvasSizeSelectValue = useMemo(() => {
+    const match = CANVAS_SIZE_PRESETS.find(
+      (preset) => preset.width === projectWidth && preset.height === projectHeight
+    )
+    return match ? `${match.width}x${match.height}` : 'custom'
+  }, [projectWidth, projectHeight])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const rasterInputRef = useRef<HTMLInputElement>(null)
+  const projectNameInputRef = useRef<HTMLInputElement>(null)
+  const [editingProjectName, setEditingProjectName] = useState(false)
+  const [draftProjectName, setDraftProjectName] = useState(projectName)
+
+  useEffect(() => {
+    setDraftProjectName(projectName)
+    setEditingProjectName(false)
+  }, [projectName])
+
+  useEffect(() => {
+    if (!editingProjectName) return
+    projectNameInputRef.current?.focus()
+    projectNameInputRef.current?.select()
+  }, [editingProjectName])
+
+  function beginProjectNameEdit() {
+    setDraftProjectName(projectName)
+    setEditingProjectName(true)
+  }
+
+  function commitProjectName() {
+    const next = draftProjectName.trim() || 'Untitled'
+    setDraftProjectName(next)
+    setEditingProjectName(false)
+    if (next !== projectName) {
+      setProjectMeta({ name: next })
+    }
+  }
+
+  function cancelProjectNameEdit() {
+    setDraftProjectName(projectName)
+    setEditingProjectName(false)
+  }
+
+  function onProjectNameKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') {
+      commitProjectName()
+      return
+    }
+    if (e.key === 'Escape') {
+      cancelProjectNameEdit()
+    }
+  }
 
   const hasElectronImport = typeof window.api?.importSvg === 'function'
   const hasElectronRasterImport = typeof window.api?.importRaster === 'function'
@@ -46,21 +111,87 @@ export function TopBar() {
 
   return (
     <header className="top-bar">
-      <strong style={{ marginRight: 12 }}>{projectName}</strong>
+      {editingProjectName ? (
+        <input
+          ref={projectNameInputRef}
+          type="text"
+          className="top-bar-project-name"
+          value={draftProjectName}
+          aria-label="Project name"
+          spellCheck={false}
+          onChange={(e) => setDraftProjectName(e.target.value)}
+          onBlur={commitProjectName}
+          onKeyDown={onProjectNameKeyDown}
+        />
+      ) : (
+        <Tooltip content="Double-click to rename project">
+          <span
+            className="top-bar-project-name top-bar-project-name--display"
+            role="button"
+            tabIndex={0}
+            aria-label={`Project name: ${projectName}`}
+            onDoubleClick={beginProjectNameEdit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') beginProjectNameEdit()
+            }}
+          >
+            {projectName}
+          </span>
+        </Tooltip>
+      )}
       <div className="mode-toggle">
         {modes.map((m) => (
-          <button
+          <Tooltip
             key={m.id}
-            type="button"
-            disabled={symbolEditing}
-            title={symbolEditing ? 'Finish symbol editing first' : undefined}
-            className={clsx(mode === m.id && 'active')}
-            onClick={() => setMode(m.id)}
+            content={symbolEditing ? 'Finish symbol editing first' : undefined}
           >
-            {m.label}
-          </button>
+            <button
+              type="button"
+              disabled={symbolEditing}
+              className={clsx(mode === m.id && 'active')}
+              onClick={() => setMode(m.id)}
+            >
+              {m.label}
+            </button>
+          </Tooltip>
         ))}
       </div>
+      <Tooltip
+        content={
+          canvasSizeLocked
+            ? symbolEditing
+              ? 'Finish symbol editing first'
+              : 'Switch to Draw or Animate to change canvas size'
+            : 'Artboard dimensions'
+        }
+        anchorClassName="top-bar-canvas-size"
+        anchorStyle={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, marginLeft: 12 }}
+      >
+        <label className="top-bar-canvas-size" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          Canvas
+          <select
+          value={canvasSizeSelectValue}
+          disabled={canvasSizeLocked}
+          onChange={(e) => {
+            const value = e.target.value
+            if (value === 'custom') return
+            const [w, h] = value.split('x').map((n) => Number(n))
+            if (Number.isFinite(w) && Number.isFinite(h)) setCanvasSize(w, h)
+          }}
+        >
+          {CANVAS_SIZE_PRESETS.map((preset) => (
+            <option key={`${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
+              {preset.label}
+            </option>
+          ))}
+          {canvasSizeSelectValue === 'custom' && (
+            <option value="custom">
+              {projectWidth} × {projectHeight} (current)
+            </option>
+          )}
+          </select>
+        </label>
+      </Tooltip>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
         <input
           ref={fileInputRef}
@@ -76,44 +207,50 @@ export function TopBar() {
           style={{ display: 'none' }}
           onChange={onPickRasterFile}
         />
-        <button
-          type="button"
-          disabled={symbolEditing}
-          title={
+        <Tooltip
+          content={
             symbolEditing
               ? 'Finish symbol editing first'
               : hasElectronImport
                 ? 'Import SVG (native dialog)'
                 : 'Import SVG from disk (browser)'
           }
-          onClick={() => {
-            if (symbolEditing) return
-            if (hasElectronImport) void importSvgFile()
-            else fileInputRef.current?.click()
-          }}
         >
-          <FontAwesomeIcon icon={faFileArrowUp} style={{ marginRight: 6 }} />
-          Import SVG…
-        </button>
-        <button
-          type="button"
-          disabled={symbolEditing}
-          title={
+          <button
+            type="button"
+            disabled={symbolEditing}
+            onClick={() => {
+              if (symbolEditing) return
+              if (hasElectronImport) void importSvgFile()
+              else fileInputRef.current?.click()
+            }}
+          >
+            <FontAwesomeIcon icon={faFileArrowUp} style={{ marginRight: 6 }} />
+            Import SVG…
+          </button>
+        </Tooltip>
+        <Tooltip
+          content={
             symbolEditing
               ? 'Finish symbol editing first'
               : hasElectronRasterImport
                 ? 'PNG / JPG / WebP → vector paths (native dialog)'
                 : 'PNG / JPG / WebP → vector paths (browser)'
           }
-          onClick={() => {
-            if (symbolEditing) return
-            if (hasElectronRasterImport) void importRasterTraceFile()
-            else rasterInputRef.current?.click()
-          }}
         >
-          <FontAwesomeIcon icon={faImage} style={{ marginRight: 6 }} />
-          Trace raster…
-        </button>
+          <button
+            type="button"
+            disabled={symbolEditing}
+            onClick={() => {
+              if (symbolEditing) return
+              if (hasElectronRasterImport) void importRasterTraceFile()
+              else rasterInputRef.current?.click()
+            }}
+          >
+            <FontAwesomeIcon icon={faImage} style={{ marginRight: 6 }} />
+            Trace raster…
+          </button>
+        </Tooltip>
       </div>
     </header>
   )

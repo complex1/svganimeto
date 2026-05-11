@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import clsx from 'clsx'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { nanoid } from 'nanoid'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faChevronDown, faChevronRight, faCircleInfo } from '@fortawesome/free-solid-svg-icons'
+import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import { flattenForLayers } from '@/engines/document/tree'
 import { sampleTrack } from '@/engines/animation/interpolate'
@@ -11,6 +15,103 @@ import type { AnimationTrack } from '@/types/animation'
 import type { VectorElement } from '@/types/document'
 import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
 import type { LinearGradientDef, RadialGradientDef } from '@/types/gradient'
+
+function InspectorHelpIcon({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="inspector-help">
+      <button type="button" className="inspector-help-trigger" aria-label={label}>
+        <FontAwesomeIcon icon={faCircleInfo} style={{ fontSize: 14 }} />
+      </button>
+      <div role="tooltip" className="inspector-help-tooltip">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+type InspectorSectionId =
+  | 'layer'
+  | 'transform'
+  | 'animation'
+  | 'symbol'
+  | 'geometry'
+  | 'appearance'
+  | 'typography'
+  | 'effects'
+  | 'advanced'
+  | 'layout'
+
+const defaultOpenSections: Record<InspectorSectionId, boolean> = {
+  layer: true,
+  transform: true,
+  animation: true,
+  symbol: true,
+  geometry: true,
+  appearance: true,
+  typography: false,
+  effects: false,
+  advanced: false,
+  layout: false
+}
+
+function InspectorCollapsibleSection({
+  sectionId,
+  title,
+  info,
+  infoLabel,
+  expanded,
+  onToggle,
+  disabled = false,
+  disabledReason,
+  children
+}: {
+  sectionId: InspectorSectionId
+  title: string
+  info?: ReactNode
+  infoLabel?: string
+  expanded: boolean
+  onToggle: () => void
+  disabled?: boolean
+  disabledReason?: string
+  children: ReactNode
+}) {
+  return (
+    <section
+      className={clsx('inspector-section', disabled && 'inspector-section--disabled')}
+      data-section={sectionId}
+    >
+      <div className="inspector-section-header">
+        <button
+          type="button"
+          className="inspector-section-toggle"
+          aria-expanded={expanded}
+          aria-controls={`inspector-section-${sectionId}`}
+          onClick={onToggle}
+        >
+          <FontAwesomeIcon
+            icon={expanded ? faChevronDown : faChevronRight}
+            className="inspector-section-chevron"
+            aria-hidden
+          />
+          <span className="inspector-section-title">{title}</span>
+        </button>
+        {info ? (
+          <div className="inspector-section-help" onClick={(e) => e.stopPropagation()}>
+            <InspectorHelpIcon label={infoLabel ?? `About ${title}`}>{info}</InspectorHelpIcon>
+          </div>
+        ) : null}
+      </div>
+      {expanded ? (
+        <div id={`inspector-section-${sectionId}`} className="inspector-section-body">
+          {disabled && disabledReason ? (
+            <p className="inspector-section-hint">{disabledReason}</p>
+          ) : null}
+          {!disabled ? children : null}
+        </div>
+      ) : null}
+    </section>
+  )
+}
 
 /** Resolved `d` for a path layer at a timeline time (includes pathD track if any). */
 function mergedPathDForLayer(
@@ -51,6 +152,10 @@ export function RightInspector() {
   const el = id ? flattenForLayers(elements).find((x) => x.el.id === id)?.el : undefined
 
   const [morphTargetPathId, setMorphTargetPathId] = useState('')
+  const [openSections, setOpenSections] = useState(defaultOpenSections)
+  const toggleSection = (sectionId: InspectorSectionId) => {
+    setOpenSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }))
+  }
   useEffect(() => {
     setMorphTargetPathId('')
   }, [id])
@@ -58,6 +163,59 @@ export function RightInspector() {
   const pathLayersForMotion = useMemo(() => {
     return flattenForLayers(elements).filter((x) => x.el.type === 'path')
   }, [elements])
+
+  if (selectedIds.length === 0) {
+    return (
+      <aside className="area-inspector">
+        <div className="panel-section-title">Inspector</div>
+        <p style={{ padding: 12, color: 'var(--text-muted)' }}>Select a layer</p>
+      </aside>
+    )
+  }
+
+  if (selectedIds.length > 1) {
+    return (
+      <aside className="area-inspector">
+        <div className="panel-section-title">Inspector</div>
+        <div className="inspector-panel">
+          <InspectorCollapsibleSection
+            sectionId="layer"
+            title="Selection"
+            expanded={openSections.layer}
+            onToggle={() => toggleSection('layer')}
+            info={
+              <>
+                {selectedIds.length} layers selected. Group wraps siblings (same parent or root) into one layer so you
+                can animate the whole group (transform, opacity, etc.) on the timeline.
+                <br />
+                <br />
+                Shortcuts: ⌘⇧G / Ctrl+Shift+G (group) · ⌘D / Ctrl+D (duplicate)
+              </>
+            }
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button
+                type="button"
+                className="primary"
+                disabled={mode === 'preview' || mode === 'export'}
+                onClick={() => useEditorStore.getState().groupSelection()}
+              >
+                Group selection
+              </button>
+              <button
+                type="button"
+                disabled={mode === 'preview' || mode === 'export'}
+                onClick={() => useEditorStore.getState().duplicateSelection()}
+              >
+                Duplicate selection
+              </button>
+            </div>
+          </InspectorCollapsibleSection>
+        </div>
+      </aside>
+    )
+  }
+
   if (!el) {
     return (
       <aside className="area-inspector">
@@ -197,14 +355,10 @@ export function RightInspector() {
     upsertGradient({ ...activeGradient, ...partial })
   }
 
-  const sectionTitleStyle: CSSProperties = {
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-    color: 'var(--text-muted)',
-    margin: '14px 0 8px'
-  }
+  const motionPathActive =
+    !isSymbolInstance &&
+    typeof el.attrs.__motionPathId === 'string' &&
+    el.attrs.__motionPathId.trim() !== ''
 
   const numAttr = (key: string, fallback = 0) => {
     const raw = el.attrs[key]
@@ -245,7 +399,7 @@ export function RightInspector() {
         type="number"
         step={key === 'opacity' ? 0.05 : key === 'rotation' ? 1 : 1}
         value={Number(tr[key].toFixed(4))}
-        disabled={el.locked || mode === 'export'}
+        disabled={attrsUiLocked}
         onChange={(e) => {
           const v = Number(e.target.value)
           if (Number.isFinite(v)) updateTransform(el.id, { [key]: v })
@@ -315,28 +469,92 @@ export function RightInspector() {
     }
   }
 
+  const geometryTypeOnlyTransform = ['group', 'polygon', 'polyline', 'text'].includes(el.type)
+  const geometrySectionDisabled = attrsUiLocked || geometryTypeOnlyTransform
+  const geometrySectionReason = el.locked
+    ? 'Layer is locked.'
+    : mode === 'export'
+      ? 'Export mode is read-only.'
+      : geometryTypeOnlyTransform
+        ? 'This layer type has no separate geometry fields—use Transform.'
+        : undefined
+  const appearanceSectionDisabled = isSymbolInstance || attrsUiLocked
+  const appearanceSectionReason = isSymbolInstance
+    ? 'Edit appearance on the symbol master.'
+    : el.locked
+      ? 'Layer is locked.'
+      : mode === 'export'
+        ? 'Export mode is read-only.'
+        : undefined
+  const typographySectionDisabled = !canTypography
+  const typographySectionReason = 'Typography applies to text layers only.'
+  const alignSectionReason = mode !== 'draw'
+    ? 'Switch to Draw mode to align layers.'
+    : 'Select two or more layers to align.'
+  const shapeBuilderReason = mode !== 'draw'
+    ? 'Switch to Draw mode for shape builder.'
+    : selectedIds.length < 2
+      ? 'Select two or more compatible shapes.'
+      : 'Selected layers must be paths or basic shapes with the same parent.'
+
   return (
     <aside className="area-inspector">
-      <div style={{ padding: 12 }}>
-        <div style={{ ...sectionTitleStyle, marginTop: 0 }}>Transform</div>
-        {!isSymbolInstance &&
-          typeof el.attrs.__motionPathId === 'string' &&
-          el.attrs.__motionPathId.trim() !== '' && (
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.35 }}>
-              Motion path is active. The layer rides along the guide path; <strong>X/Y</strong>{' '}
-              now act as a constant offset added on top of the path point. Set them to 0 to snap exactly onto the path.
-            </p>
-          )}
-        {activeTransformKeys.map((key) => row(transformLabel[key], key))}
-        {!isSymbolInstance && (
-          <>
-            <div style={sectionTitleStyle}>Motion path</div>
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.4 }}>
-              Follow another <strong>path</strong> layer’s curve. At{' '}
-              <code style={{ fontSize: 10 }}>motionPathOffset</code> = 0 the layer sits on the
-              path’s start point; as the offset advances to 1 it travels along the path. Use the
-              slider below (Animate/Preview) — it auto-keyframes at the playhead.
-            </p>
+      <div className="inspector-panel">
+        <InspectorCollapsibleSection
+          sectionId="layer"
+          title="Layer"
+          expanded={openSections.layer}
+          onToggle={() => toggleSection('layer')}
+        >
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              disabled={mode === 'preview' || mode === 'export'}
+              onClick={() => useEditorStore.getState().duplicateSelection()}
+              style={{ fontSize: 12 }}
+            >
+              Duplicate layer
+            </button>
+          </div>
+        </InspectorCollapsibleSection>
+        <InspectorCollapsibleSection
+          sectionId="transform"
+          title="Transform"
+          expanded={openSections.transform}
+          onToggle={() => toggleSection('transform')}
+          disabled={attrsUiLocked}
+          disabledReason={
+            el.locked ? 'Layer is locked.' : mode === 'export' ? 'Export mode is read-only.' : undefined
+          }
+          info={
+            motionPathActive ? (
+              <>
+                Motion path is active. The layer rides along the guide path; <strong>X/Y</strong> now act as a
+                constant offset added on top of the path point. Set them to 0 to snap exactly onto the path.
+              </>
+            ) : undefined
+          }
+        >
+          {activeTransformKeys.map((key) => row(transformLabel[key], key))}
+        </InspectorCollapsibleSection>
+        {!isSymbolInstance ? (
+          <InspectorCollapsibleSection
+            sectionId="animation"
+            title="Animation"
+            expanded={openSections.animation}
+            onToggle={() => toggleSection('animation')}
+            disabled={attrsUiLocked}
+            disabledReason={
+              el.locked ? 'Layer is locked.' : mode === 'export' ? 'Export mode is read-only.' : undefined
+            }
+            info={
+              <>
+                Motion path and path morph controls. Offset keyframes require{' '}
+                <strong>Animate</strong> or <strong>Preview</strong> mode.
+              </>
+            }
+          >
+            <div className="inspector-subsection-title">Motion path</div>
             <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <span style={{ color: 'var(--text-muted)' }}>Guide path</span>
               <select
@@ -372,7 +590,7 @@ export function RightInspector() {
               <input
                 type="checkbox"
                 checked={el.attrs.__motionPathRotate === true || el.attrs.__motionPathRotate === 1}
-                disabled={attrsUiLocked}
+                disabled={attrsUiLocked || !el.attrs.__motionPathId}
                 onChange={(e) => setElementAttrs(el.id, { __motionPathRotate: e.target.checked })}
               />
               <span style={{ fontSize: 12 }}>Rotate to path tangent</span>
@@ -428,10 +646,13 @@ export function RightInspector() {
               }
               return (
                 <>
+                  {!canKey ? (
+                    <p className="inspector-section-hint">Switch to Animate or Preview to edit motion offset keyframes.</p>
+                  ) : null}
                   <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                    <span style={{ color: 'var(--text-muted)' }} title="0 = path start, 1 = path end">
-                      Offset
-                    </span>
+                    <Tooltip content="0 = path start, 1 = path end">
+                      <span style={{ color: 'var(--text-muted)' }}>Offset</span>
+                    </Tooltip>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <input
                         type="range"
@@ -462,49 +683,53 @@ export function RightInspector() {
                     </div>
                   </label>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                    <button
-                      type="button"
-                      disabled={attrsUiLocked || !canKey || duration <= 0}
-                      title="Replace existing offset keyframes with 0 at start and 1 at end of timeline"
-                      onClick={() => {
-                        replaceMotionTracks([
-                          { time: 0, value: 0 },
-                          { time: duration, value: 1 }
-                        ])
-                      }}
-                    >
-                      Set 0→1 over duration
-                    </button>
-                    <button
-                      type="button"
-                      disabled={attrsUiLocked || !canKey}
-                      title="Add a keyframe at the playhead with the current offset"
-                      onClick={() => upsertKeyframe(el.id, 'motionPathOffset', currentTime, offsetVal)}
-                    >
-                      + Keyframe
-                    </button>
-                    <button
-                      type="button"
-                      disabled={
-                        attrsUiLocked || !offsetTrack || (offsetTrack?.keyframes.length ?? 0) === 0
-                      }
-                      title="Remove all motion offset keyframes for this layer"
-                      onClick={() => replaceMotionTracks([])}
-                    >
-                      Clear offset keys
-                    </button>
-                    <button
-                      type="button"
-                      disabled={attrsUiLocked}
-                      title="Reset X/Y/rotation to 0 (and remove their keyframes) so this layer sits exactly on the path"
-                      onClick={() => {
-                        pushHistory()
-                        updateTransform(el.id, { x: 0, y: 0, rotation: 0 }, { skipHistory: true })
-                        clearTransformKeysForElement()
-                      }}
-                    >
-                      Snap onto path
-                    </button>
+                    <Tooltip content="Replace existing offset keyframes with 0 at start and 1 at end of timeline">
+                      <button
+                        type="button"
+                        disabled={attrsUiLocked || !canKey || duration <= 0}
+                        onClick={() => {
+                          replaceMotionTracks([
+                            { time: 0, value: 0 },
+                            { time: duration, value: 1 }
+                          ])
+                        }}
+                      >
+                        Set 0→1 over duration
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Add a keyframe at the playhead with the current offset">
+                      <button
+                        type="button"
+                        disabled={attrsUiLocked || !canKey}
+                        onClick={() => upsertKeyframe(el.id, 'motionPathOffset', currentTime, offsetVal)}
+                      >
+                        + Keyframe
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Remove all motion offset keyframes for this layer">
+                      <button
+                        type="button"
+                        disabled={
+                          attrsUiLocked || !offsetTrack || (offsetTrack?.keyframes.length ?? 0) === 0
+                        }
+                        onClick={() => replaceMotionTracks([])}
+                      >
+                        Clear offset keys
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Reset X/Y/rotation to 0 (and remove their keyframes) so this layer sits exactly on the path">
+                      <button
+                        type="button"
+                        disabled={attrsUiLocked}
+                        onClick={() => {
+                          pushHistory()
+                          updateTransform(el.id, { x: 0, y: 0, rotation: 0 }, { skipHistory: true })
+                          clearTransformKeysForElement()
+                        }}
+                      >
+                        Snap onto path
+                      </button>
+                    </Tooltip>
                   </div>
                   {conflictingTransformTracks.length > 0 && (
                     <div
@@ -538,63 +763,83 @@ export function RightInspector() {
                       </button>
                     </div>
                   )}
-                  {!canKey && (
-                    <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px' }}>
-                      Switch to <strong>Animate</strong> or <strong>Preview</strong> to set the offset.
-                    </p>
-                  )}
                 </>
               )
             })()}
-          </>
-        )}
-        {isSymbolInstance && (
-          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>
-              Symbol instance
-              {symbolMaster ? (
+          </InspectorCollapsibleSection>
+        ) : null}
+        {isSymbolInstance ? (
+          <InspectorCollapsibleSection
+            sectionId="symbol"
+            title={symbolMaster ? `Symbol · ${symbolMaster.name}` : 'Symbol instance'}
+            expanded={openSections.symbol}
+            onToggle={() => toggleSection('symbol')}
+            info={
+              symbolMaster ? (
                 <>
-                  : <strong>{symbolMaster.name}</strong>. Edits to the master apply to every instance.
+                  Symbol instance linked to master <strong>{symbolMaster.name}</strong>. Edits to the master apply
+                  to every instance.
                 </>
               ) : (
-                <> (missing master)</>
-              )}
-            </p>
-            {symbolMaster && (
+                <>Symbol instance with a missing master.</>
+              )
+            }
+          >
+            {symbolMaster ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={el.locked || symbolEditing || mode !== 'draw'}
-                  title={
+                <Tooltip
+                  content={
                     symbolEditing
                       ? 'Finish symbol editing first'
                       : 'Open symbol master on its own canvas'
                   }
-                  onClick={() => beginSymbolEdit(symbolMaster.id)}
                 >
-                  Edit symbol…
-                </button>
-                <button
-                  type="button"
-                  disabled={el.locked || symbolEditing || mode !== 'draw'}
-                  title={
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={el.locked || symbolEditing || mode !== 'draw'}
+                    onClick={() => beginSymbolEdit(symbolMaster.id)}
+                  >
+                    Edit symbol…
+                  </button>
+                </Tooltip>
+                <Tooltip
+                  content={
                     symbolEditing
                       ? 'Finish symbol editing first'
                       : 'Turn into normal group (no longer linked)'
                   }
-                  onClick={() => detachSymbolInstance(el.id)}
                 >
-                  Detach instance
-                </button>
+                  <button
+                    type="button"
+                    disabled={el.locked || symbolEditing || mode !== 'draw'}
+                    onClick={() => detachSymbolInstance(el.id)}
+                  >
+                    Detach instance
+                  </button>
+                </Tooltip>
               </div>
+            ) : (
+              <p className="inspector-section-hint">Symbol master not found.</p>
             )}
-          </div>
-        )}
-        {canCornerRadius && (
-          <>
-            <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ color: 'var(--text-muted)' }}>RX</span>
+          </InspectorCollapsibleSection>
+        ) : null}
+        {!isSymbolInstance ? (
+          <InspectorCollapsibleSection
+            sectionId="geometry"
+            title="Geometry"
+            expanded={openSections.geometry}
+            onToggle={() => toggleSection('geometry')}
+            disabled={geometrySectionDisabled}
+            disabledReason={geometrySectionReason}
+            info={
+              geometryTypeOnlyTransform ? <>Use transform controls for this layer type.</> : undefined
+            }
+          >
+            {canCornerRadius ? (
+              <>
+                <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Corner RX</span>
               <input
                 type="number"
                 min={0}
@@ -625,12 +870,8 @@ export function RightInspector() {
                 }}
               />
             </label>
-          </>
-        )}
-
-        {!isSymbolInstance && (
-          <>
-            <div style={sectionTitleStyle}>Geometry</div>
+              </>
+            ) : null}
             {el.type === 'rect' && (
               <>
                 <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
@@ -764,23 +1005,29 @@ export function RightInspector() {
             )}
             {el.type === 'path' && (
               <>
-                <p style={{ margin: '0 0 8px', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45 }}>
-                  Use Path Edit (Draw) to change points and curves.
-                </p>
+                <div className="inspector-subsection-title">Path editing</div>
+                <p className="inspector-section-hint">Use Path Edit (Draw) to change points and curves.</p>
                 {!isSymbolInstance && (
                   <>
-                    <div style={sectionTitleStyle}>Path morph</div>
-                    <p style={{ margin: '0 0 8px', color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.45 }}>
-                      Animate the <code style={{ fontSize: 10 }}>d</code> attribute between keyframes on the{' '}
-                      <strong>pathD</strong> timeline track. Shapes blend approximately (same point count along length
-                      works best). Transforms are separate: align layers in Draw if needed.
-                    </p>
-                    <p style={{ margin: '0 0 8px', color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.45 }}>
-                      <strong>Point animation:</strong> in <strong>Animate</strong> or <strong>Preview</strong>, use{' '}
-                      <strong>Path Edit (N)</strong>, scrub the playhead, drag anchors or handles, then release — a{' '}
-                      <strong>pathD</strong> keyframe is saved at that time. Scrub again, reshape, release for the next
-                      pose; playback morphs between those shapes.
-                    </p>
+                    <div className="inspector-subsection-header">
+                      <div className="inspector-subsection-title">Path morph</div>
+                      <InspectorHelpIcon label="About path morph">
+                        <>
+                          Animate the <code style={{ fontSize: 10 }}>d</code> attribute between keyframes on the{' '}
+                          <strong>pathD</strong> timeline track. Shapes blend approximately (same point count along
+                          length works best). Transforms are separate: align layers in Draw if needed.
+                          <br />
+                          <br />
+                          <strong>Point animation:</strong> in <strong>Animate</strong> or <strong>Preview</strong>,
+                          use <strong>Path Edit (N)</strong>, scrub the playhead, drag anchors or handles, then release
+                          — a <strong>pathD</strong> keyframe is saved at that time. Scrub again, reshape, release for
+                          the next pose; playback morphs between those shapes.
+                          <br />
+                          <br />
+                          Switch to <strong>Animate</strong> or <strong>Preview</strong> to edit path morph keys.
+                        </>
+                      </InspectorHelpIcon>
+                    </div>
                     <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
                       <span style={{ color: 'var(--text-muted)' }}>Morph toward</span>
                       <select
@@ -837,69 +1084,71 @@ export function RightInspector() {
                           : ''
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
+                          {!canKey ? (
+                            <p className="inspector-section-hint">Switch to Animate or Preview to edit path morph keyframes.</p>
+                          ) : null}
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                            <button
-                              type="button"
-                              disabled={
-                                attrsUiLocked ||
-                                !canKey ||
-                                duration <= 0 ||
-                                !morphTargetPathId ||
-                                !dSelf0 ||
-                                !dTargetEnd
-                              }
-                              title="Replace pathD keys: this layer at t=0 → target path’s shape at t=duration"
-                              onClick={() => {
-                                replacePathDMorphKeys([
-                                  { time: 0, valueText: dSelf0 },
-                                  { time: duration, valueText: dTargetEnd }
-                                ])
-                              }}
-                            >
-                              Morph to target over duration
-                            </button>
-                            <button
-                              type="button"
-                              disabled={attrsUiLocked || !canKey || !dSelfAtPlayhead}
-                              title="pathD keyframe at playhead with this layer’s current shape"
-                              onClick={() =>
-                                upsertKeyframe(el.id, 'pathD', currentTime, 0, undefined, {
-                                  valueText: dSelfAtPlayhead
-                                })
-                              }
-                            >
-                              + Keyframe this shape
-                            </button>
-                            <button
-                              type="button"
-                              disabled={
-                                attrsUiLocked || !canKey || !morphTargetPathId || !dTargetAtPlayhead
-                              }
-                              title="pathD keyframe at playhead using the target path’s shape (same timeline time)"
-                              onClick={() =>
-                                upsertKeyframe(el.id, 'pathD', currentTime, 0, undefined, {
-                                  valueText: dTargetAtPlayhead
-                                })
-                              }
-                            >
-                              + Keyframe target shape
-                            </button>
-                            <button
-                              type="button"
-                              disabled={
-                                attrsUiLocked || !pathDTrack || pathDTrack.keyframes.length === 0
-                              }
-                              title="Remove all pathD keyframes for this layer"
-                              onClick={() => replacePathDMorphKeys([])}
-                            >
-                              Clear pathD keys
-                            </button>
+                            <Tooltip content="Replace pathD keys: this layer at t=0 → target path’s shape at t=duration">
+                              <button
+                                type="button"
+                                disabled={
+                                  attrsUiLocked ||
+                                  !canKey ||
+                                  duration <= 0 ||
+                                  !morphTargetPathId ||
+                                  !dSelf0 ||
+                                  !dTargetEnd
+                                }
+                                onClick={() => {
+                                  replacePathDMorphKeys([
+                                    { time: 0, valueText: dSelf0 },
+                                    { time: duration, valueText: dTargetEnd }
+                                  ])
+                                }}
+                              >
+                                Morph to target over duration
+                              </button>
+                            </Tooltip>
+                            <Tooltip content="pathD keyframe at playhead with this layer’s current shape">
+                              <button
+                                type="button"
+                                disabled={attrsUiLocked || !canKey || !dSelfAtPlayhead}
+                                onClick={() =>
+                                  upsertKeyframe(el.id, 'pathD', currentTime, 0, undefined, {
+                                    valueText: dSelfAtPlayhead
+                                  })
+                                }
+                              >
+                                + Keyframe this shape
+                              </button>
+                            </Tooltip>
+                            <Tooltip content="pathD keyframe at playhead using the target path’s shape (same timeline time)">
+                              <button
+                                type="button"
+                                disabled={
+                                  attrsUiLocked || !canKey || !morphTargetPathId || !dTargetAtPlayhead
+                                }
+                                onClick={() =>
+                                  upsertKeyframe(el.id, 'pathD', currentTime, 0, undefined, {
+                                    valueText: dTargetAtPlayhead
+                                  })
+                                }
+                              >
+                                + Keyframe target shape
+                              </button>
+                            </Tooltip>
+                            <Tooltip content="Remove all pathD keyframes for this layer">
+                              <button
+                                type="button"
+                                disabled={
+                                  attrsUiLocked || !pathDTrack || pathDTrack.keyframes.length === 0
+                                }
+                                onClick={() => replacePathDMorphKeys([])}
+                              >
+                                Clear pathD keys
+                              </button>
+                            </Tooltip>
                           </div>
-                          {!canKey && (
-                            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
-                              Switch to <strong>Animate</strong> or <strong>Preview</strong> to edit path morph keys.
-                            </p>
-                          )}
                         </div>
                       )
                     })()}
@@ -907,15 +1156,19 @@ export function RightInspector() {
                 )}
               </>
             )}
-            {['group', 'polygon', 'polyline', 'text'].includes(el.type) && (
-              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 12 }}>
-                Use transform controls for this layer type.
-              </p>
-            )}
-          </>
-        )}
+          </InspectorCollapsibleSection>
+        ) : null}
 
-        {!isSymbolInstance && <div style={sectionTitleStyle}>Fill</div>}
+        {!isSymbolInstance ? (
+          <InspectorCollapsibleSection
+            sectionId="appearance"
+            title="Appearance"
+            expanded={openSections.appearance}
+            onToggle={() => toggleSection('appearance')}
+            disabled={appearanceSectionDisabled}
+            disabledReason={appearanceSectionReason}
+          >
+            <div className="inspector-subsection-title">Fill</div>
         {canFillGradient && (
           <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
             <span style={{ color: 'var(--text-muted)' }}>Fill</span>
@@ -1026,9 +1279,7 @@ export function RightInspector() {
           </div>
         )}
 
-        {!isSymbolInstance && (
-          <>
-            <div style={sectionTitleStyle}>Stroke</div>
+            <div className="inspector-subsection-title">Stroke</div>
             <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <span style={{ color: 'var(--text-muted)' }}>Color</span>
               <input
@@ -1053,15 +1304,20 @@ export function RightInspector() {
                 }}
               />
             </label>
-          </>
-        )}
 
-        <div style={sectionTitleStyle}>Typography</div>
-        {!canTypography ? (
-          <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 12 }}>
-            Select a text layer to edit typography.
-          </p>
-        ) : (
+        </InspectorCollapsibleSection>
+        ) : null}
+
+        <InspectorCollapsibleSection
+          sectionId="typography"
+          title="Typography"
+          expanded={openSections.typography}
+          onToggle={() => toggleSection('typography')}
+          disabled={typographySectionDisabled}
+          disabledReason={typographySectionReason}
+          info={!canTypography ? <>Select a text layer to edit typography.</> : undefined}
+        >
+        {canTypography ? (
           <>
             <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <span style={{ color: 'var(--text-muted)' }}>Content</span>
@@ -1105,9 +1361,17 @@ export function RightInspector() {
               />
             </label>
           </>
-        )}
+        ) : null}
+        </InspectorCollapsibleSection>
 
-        <div style={sectionTitleStyle}>Effects</div>
+        <InspectorCollapsibleSection
+          sectionId="effects"
+          title="Effects"
+          expanded={openSections.effects}
+          onToggle={() => toggleSection('effects')}
+          disabled={attrsUiLocked}
+          disabledReason={el.locked ? 'Layer is locked.' : mode === 'export' ? 'Export mode is read-only.' : undefined}
+        >
         <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <span style={{ color: 'var(--text-muted)' }}>Enabled</span>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -1152,7 +1416,7 @@ export function RightInspector() {
           <input
             type="color"
             value={shadowColorFx.startsWith('#') ? shadowColorFx : '#000000'}
-            disabled={attrsUiLocked}
+            disabled={attrsUiLocked || !effectsActive}
             onChange={(e) => setElementAttrs(el.id, { __fxShadowColor: e.target.value })}
             style={{ width: '100%', height: 28, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
           />
@@ -1163,7 +1427,7 @@ export function RightInspector() {
             type="number"
             step={1}
             value={shadowXFx}
-            disabled={attrsUiLocked}
+            disabled={attrsUiLocked || !effectsActive}
             onChange={(e) => {
               const v = Number(e.target.value)
               if (Number.isFinite(v)) setElementAttrs(el.id, { __fxShadowX: v })
@@ -1176,7 +1440,7 @@ export function RightInspector() {
             type="number"
             step={1}
             value={shadowYFx}
-            disabled={attrsUiLocked}
+            disabled={attrsUiLocked || !effectsActive}
             onChange={(e) => {
               const v = Number(e.target.value)
               if (Number.isFinite(v)) setElementAttrs(el.id, { __fxShadowY: v })
@@ -1190,7 +1454,7 @@ export function RightInspector() {
             min={0}
             step={0.5}
             value={shadowBlurFx}
-            disabled={attrsUiLocked}
+            disabled={attrsUiLocked || !effectsActive}
             onChange={(e) => {
               const v = Number(e.target.value)
               if (Number.isFinite(v)) setElementAttrs(el.id, { __fxShadowBlur: Math.max(0, v) })
@@ -1198,14 +1462,24 @@ export function RightInspector() {
           />
         </label>
 
-        {!isSymbolInstance && (
-          <>
-            <div style={sectionTitleStyle}>Mask / clip / SVG filter</div>
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.4 }}>
-              Presentation attributes (e.g. <code style={{ fontSize: 10 }}>url(#myMask)</code>). Keyframe{' '}
-              <code style={{ fontSize: 10 }}>mask</code>, <code style={{ fontSize: 10 }}>clipPath</code>,{' '}
-              <code style={{ fontSize: 10 }}>svgFilter</code> on the timeline.
-            </p>
+        </InspectorCollapsibleSection>
+
+        {!isSymbolInstance ? (
+          <InspectorCollapsibleSection
+            sectionId="advanced"
+            title="Mask / clip / SVG filter"
+            expanded={openSections.advanced}
+            onToggle={() => toggleSection('advanced')}
+            disabled={attrsUiLocked}
+            disabledReason={el.locked ? 'Layer is locked.' : mode === 'export' ? 'Export mode is read-only.' : undefined}
+            info={
+              <>
+                Presentation attributes (e.g. <code style={{ fontSize: 10 }}>url(#myMask)</code>). Keyframe{' '}
+                <code style={{ fontSize: 10 }}>mask</code>, <code style={{ fontSize: 10 }}>clipPath</code>,{' '}
+                <code style={{ fontSize: 10 }}>svgFilter</code> on the timeline.
+              </>
+            }
+          >
             <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <span style={{ color: 'var(--text-muted)' }}>mask</span>
               <input
@@ -1234,57 +1508,77 @@ export function RightInspector() {
                 onChange={(e) => setElementAttrs(el.id, { filter: e.target.value })}
               />
             </label>
-          </>
-        )}
+          </InspectorCollapsibleSection>
+        ) : null}
 
-        <div style={sectionTitleStyle}>Alignment</div>
+        <InspectorCollapsibleSection
+          sectionId="layout"
+          title="Layout"
+          expanded={openSections.layout}
+          onToggle={() => toggleSection('layout')}
+        >
+          <div className="inspector-subsection-title">Alignment</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-          <button type="button" disabled={!canAlign} title="Align Left" onClick={() => alignSelected('x', 'start')}>Left</button>
-          <button type="button" disabled={!canAlign} title="Align Center" onClick={() => alignSelected('x', 'center')}>Center</button>
-          <button type="button" disabled={!canAlign} title="Align Right" onClick={() => alignSelected('x', 'end')}>Right</button>
-          <button type="button" disabled={!canAlign} title="Align Top" onClick={() => alignSelected('y', 'start')}>Top</button>
-          <button type="button" disabled={!canAlign} title="Align Middle" onClick={() => alignSelected('y', 'center')}>Middle</button>
-          <button type="button" disabled={!canAlign} title="Align Bottom" onClick={() => alignSelected('y', 'end')}>Bottom</button>
+          <Tooltip content="Align Left">
+            <button type="button" disabled={!canAlign} onClick={() => alignSelected('x', 'start')}>Left</button>
+          </Tooltip>
+          <Tooltip content="Align Center">
+            <button type="button" disabled={!canAlign} onClick={() => alignSelected('x', 'center')}>Center</button>
+          </Tooltip>
+          <Tooltip content="Align Right">
+            <button type="button" disabled={!canAlign} onClick={() => alignSelected('x', 'end')}>Right</button>
+          </Tooltip>
+          <Tooltip content="Align Top">
+            <button type="button" disabled={!canAlign} onClick={() => alignSelected('y', 'start')}>Top</button>
+          </Tooltip>
+          <Tooltip content="Align Middle">
+            <button type="button" disabled={!canAlign} onClick={() => alignSelected('y', 'center')}>Middle</button>
+          </Tooltip>
+          <Tooltip content="Align Bottom">
+            <button type="button" disabled={!canAlign} onClick={() => alignSelected('y', 'end')}>Bottom</button>
+          </Tooltip>
         </div>
 
-        <div style={sectionTitleStyle}>Shape builder</div>
-        <p style={{ margin: '0 0 8px', color: 'var(--text-muted)', fontSize: 12 }}>
-          Select two or more overlapping paths or shapes with the same parent. Subtract uses the first selected layer as the base.
-        </p>
+          <div className="inspector-subsection-title">Shape builder</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
-          <button
-            type="button"
-            disabled={!canShapeBoolean}
-            title="Union — merge into one path"
-            onClick={() => applyBooleanOperation('union')}
-          >
-            Merge
-          </button>
-          <button
-            type="button"
-            disabled={!canShapeBoolean}
-            title="Subtract others from first selected"
-            onClick={() => applyBooleanOperation('subtract')}
-          >
-            Subtract
-          </button>
-          <button
-            type="button"
-            disabled={!canShapeBoolean}
-            title="Intersect all selections"
-            onClick={() => applyBooleanOperation('intersect')}
-          >
-            Intersect
-          </button>
-          <button
-            type="button"
-            disabled={!canShapeBoolean}
-            title="Symmetric difference"
-            onClick={() => applyBooleanOperation('xor')}
-          >
-            Exclude
-          </button>
+          <Tooltip content="Union — merge into one path">
+            <button
+              type="button"
+              disabled={!canShapeBoolean}
+              onClick={() => applyBooleanOperation('union')}
+            >
+              Merge
+            </button>
+          </Tooltip>
+          <Tooltip content="Subtract others from first selected">
+            <button
+              type="button"
+              disabled={!canShapeBoolean}
+              onClick={() => applyBooleanOperation('subtract')}
+            >
+              Subtract
+            </button>
+          </Tooltip>
+          <Tooltip content="Intersect all selections">
+            <button
+              type="button"
+              disabled={!canShapeBoolean}
+              onClick={() => applyBooleanOperation('intersect')}
+            >
+              Intersect
+            </button>
+          </Tooltip>
+          <Tooltip content="Symmetric difference">
+            <button
+              type="button"
+              disabled={!canShapeBoolean}
+              onClick={() => applyBooleanOperation('xor')}
+            >
+              Exclude
+            </button>
+          </Tooltip>
         </div>
+        </InspectorCollapsibleSection>
       </div>
     </aside>
   )

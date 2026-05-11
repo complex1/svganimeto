@@ -15,6 +15,8 @@ import { usePlaybackLoop } from '@/hooks/usePlaybackLoop'
 import { GsapTimelineDevPanel } from '@/components/dev/GsapTimelineDevPanel'
 import { RasterImportModal } from '@/components/RasterImportModal'
 import { PreviewFullscreenOverlay } from '@/components/preview/PreviewFullscreenOverlay'
+import { ResizeHandle } from '@/components/ResizeHandle'
+import { useWorkspaceLayout } from '@/hooks/useWorkspaceLayout'
 import {
   applyImportedSvg,
   importSvgFile,
@@ -32,6 +34,7 @@ export default function App() {
   const redo = useEditorStore((s) => s.redo)
   const deleteSelected = useEditorStore((s) => s.deleteSelected)
   const [exportOpen, setExportOpen] = useState(false)
+  const { layout, resizeInspector, resizeBottom, resizeLayers } = useWorkspaceLayout()
 
   usePlaybackLoop()
 
@@ -94,9 +97,34 @@ export default function App() {
         e.preventDefault()
         deleteSelected()
       }
+      if (
+        meta &&
+        e.shiftKey &&
+        e.key.toLowerCase() === 'g' &&
+        (mode === 'draw' || mode === 'animate')
+      ) {
+        const t = e.target as HTMLElement
+        if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
+        e.preventDefault()
+        useEditorStore.getState().groupSelection()
+        return
+      }
+      if (
+        meta &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === 'd' &&
+        (mode === 'draw' || mode === 'animate')
+      ) {
+        const t = e.target as HTMLElement
+        if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
+        e.preventDefault()
+        useEditorStore.getState().duplicateSelection()
+        return
+      }
       if (mode === 'draw') {
         const key = e.key.toLowerCase()
         if (key === 'v') setActiveTool('select')
+        if (key === 'h') setActiveTool('hand')
         if (key === 'g') setActiveTool('shape-builder')
         if (key === 'r') setActiveTool('rect')
         if (key === 'o') setActiveTool('circle')
@@ -127,26 +155,61 @@ export default function App() {
         <>
           <TopBar />
           <SymbolEditBanner />
-          <div className="app-layout">
+          <div
+            className="app-layout"
+            style={{
+              gridTemplateColumns: `48px 1fr ${layout.inspectorWidth}px`,
+              gridTemplateRows: `1fr ${layout.bottomHeight}px`
+            }}
+          >
             <LeftToolbar />
             <main className="area-center">
-              <Canvas />
+              <div className="area-center-stage">
+                <Canvas />
+              </div>
+              <ResizeHandle
+                axis="vertical"
+                ariaLabel="Resize layers and timeline"
+                className="resize-handle-bottom"
+                onResize={resizeBottom}
+              />
             </main>
-            <RightInspector />
-            <div
-              className="area-bottom"
-              style={{ display: 'flex', flexDirection: 'row', minHeight: 0, minWidth: 0 }}
-            >
-              <LayersPanel expanded={mode === 'draw'} />
-              {mode === 'draw' && <SymbolsPanel expanded={mode === 'draw'} />}
-              {mode === 'animate' && (
-                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-                  <TimelinePanel />
+            <div className="area-inspector-shell">
+              <ResizeHandle
+                axis="horizontal"
+                ariaLabel="Resize inspector"
+                className="resize-handle-inspector"
+                onResize={resizeInspector}
+              />
+              <RightInspector />
+            </div>
+            <div className="area-bottom">
+              <div className="area-bottom-content">
+                <div className="dock-panel dock-panel-layers" style={{ width: layout.layersWidth }}>
+                  <LayersPanel />
                 </div>
-              )}
-              {mode === 'export' && (
-                <div style={{ flex: 1, padding: 12, color: 'var(--text-muted)' }}>Use the export dialog.</div>
-              )}
+                <ResizeHandle
+                  axis="horizontal"
+                  ariaLabel="Resize layers panel"
+                  className="resize-handle-layers"
+                  onResize={resizeLayers}
+                />
+                {mode === 'draw' && (
+                  <div className="dock-panel dock-panel-fill">
+                    <SymbolsPanel />
+                  </div>
+                )}
+                {mode === 'animate' && (
+                  <div className="dock-panel dock-panel-fill">
+                    <TimelinePanel />
+                  </div>
+                )}
+                {mode === 'export' && (
+                  <div className="dock-panel dock-panel-fill dock-panel-message">
+                    Use the export dialog.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </>

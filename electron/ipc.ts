@@ -112,17 +112,42 @@ export function registerIpcHandlers() {
     return { path: filePaths[0], content }
   })
 
-  ipcMain.handle('dialog:exportSvg', async (event, content: string, suggestedName?: string) => {
+  type SaveExportPayload = {
+    encoding: 'utf8' | 'base64'
+    data: string
+    defaultFileName: string
+    filters?: { name: string; extensions: string[] }[]
+  }
+
+  async function runSaveExportDialog(
+    event: Electron.IpcMainInvokeEvent,
+    payload: SaveExportPayload
+  ): Promise<string | null> {
     const parent = senderWindow(event)
     const { canceled, filePath } = await dialog.showSaveDialog(parent, {
-      title: 'Export animated SVG',
-      defaultPath: suggestedName
-        ? path.join(app.getPath('documents'), suggestedName)
-        : path.join(app.getPath('documents'), 'export.svg'),
-      filters: [{ name: 'SVG', extensions: ['svg'] }]
+      title: 'Export',
+      defaultPath: path.join(app.getPath('documents'), payload.defaultFileName),
+      filters: payload.filters?.length ? payload.filters : [{ name: 'All Files', extensions: ['*'] }]
     })
     if (canceled || !filePath) return null
-    await fs.writeFile(filePath, content, 'utf-8')
+    if (payload.encoding === 'utf8') {
+      await fs.writeFile(filePath, payload.data, 'utf-8')
+    } else {
+      await fs.writeFile(filePath, Buffer.from(payload.data, 'base64'))
+    }
     return filePath
+  }
+
+  ipcMain.handle('dialog:saveExport', async (event, payload: SaveExportPayload) => {
+    return runSaveExportDialog(event, payload)
+  })
+
+  ipcMain.handle('dialog:exportSvg', async (event, content: string, suggestedName?: string) => {
+    return runSaveExportDialog(event, {
+      encoding: 'utf8',
+      data: content,
+      defaultFileName: suggestedName ?? 'export.svg',
+      filters: [{ name: 'SVG', extensions: ['svg'] }]
+    })
   })
 }

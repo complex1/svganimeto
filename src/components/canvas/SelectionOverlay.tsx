@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import { flattenForLayers } from '@/engines/document/tree'
 
@@ -437,8 +438,8 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
         onPointerDown={onPointerDown('rotate')}
       />
       {/* Draggable pivot marker used by scale/rotate operations */}
+      <Tooltip content="Pivot (drag to move, double-click to reset)">
       <div
-        title="Pivot (drag to move, double-click to reset)"
         style={{
           position: 'absolute',
           left: pivotScreen.left - 5,
@@ -472,6 +473,7 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
           setPivotVersion((v) => v + 1)
         }}
       />
+      </Tooltip>
       {pivotMenuOpen && pivotMenuPos && (
         <div
           ref={pivotMenuRef}
