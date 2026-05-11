@@ -17,8 +17,9 @@ import type {
   KeyframeClipboardEntry,
   KeyframeSelectionEntry
 } from '@/types/animation'
-import { mergeTransformFromTracks } from '@/engines/animation/interpolate'
+import { mergeTransformFromTracks, sampleTrack } from '@/engines/animation/interpolate'
 import {
+  ATTR_TEXT_STEP_PROPERTIES,
   hexToPackedRgb,
   mergeAttrsFromTracks
 } from '@/engines/animation/attrAnimation'
@@ -327,7 +328,7 @@ function upsertKeyframeInTracks(
       value,
       easing: easing ?? prev?.easing
     }
-    if (property === 'pathD') {
+    if (ATTR_TEXT_STEP_PROPERTIES.has(property)) {
       k.valueText = valueText ?? prev?.valueText ?? ''
     } else if (valueText !== undefined) {
       k.valueText = valueText
@@ -573,7 +574,15 @@ export const useEditorStore = create<EditorState>((set, get) => {
       })),
     clearSelection: () => set({ selectedIds: [], selectedKeyframes: [] }),
 
-    setMode: (m) => set({ mode: m }),
+    setMode: (m) =>
+      set((s) => {
+        let nextTool = s.activeTool
+        if (m === 'export') nextTool = 'select'
+        else if ((m === 'animate' || m === 'preview') && nextTool !== 'select' && nextTool !== 'path-edit') {
+          nextTool = 'select'
+        }
+        return { mode: m, activeTool: nextTool }
+      }),
     setActiveTool: (tool) => set({ activeTool: tool }),
     setAutoKeyframe: (v) => set({ autoKeyframe: v }),
     setViewBox: (vb) => set({ viewBox: vb }),
@@ -765,6 +774,23 @@ export const useEditorStore = create<EditorState>((set, get) => {
                   nextTracks = upsertKeyframeInTracks(nextTracks, id, prop, t, n)
                 }
               }
+              if ('mask' in attrs && typeof attrs.mask === 'string') {
+                nextTracks = upsertKeyframeInTracks(nextTracks, id, 'mask', t, 0, undefined, attrs.mask)
+              }
+              if ('clip-path' in attrs && typeof attrs['clip-path'] === 'string') {
+                nextTracks = upsertKeyframeInTracks(
+                  nextTracks,
+                  id,
+                  'clipPath',
+                  t,
+                  0,
+                  undefined,
+                  attrs['clip-path']
+                )
+              }
+              if ('filter' in attrs && typeof attrs.filter === 'string') {
+                nextTracks = upsertKeyframeInTracks(nextTracks, id, 'svgFilter', t, 0, undefined, attrs.filter)
+              }
             }
           }
           return {
@@ -895,7 +921,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
             value,
             easing: easing ?? prev?.easing
           }
-          if (property === 'pathD') {
+          if (ATTR_TEXT_STEP_PROPERTIES.has(property)) {
             k.valueText = valueText ?? prev?.valueText ?? ''
           } else if (valueText !== undefined) {
             k.valueText = valueText
@@ -1129,6 +1155,42 @@ export const useEditorStore = create<EditorState>((set, get) => {
         const v = mergedAttrs[k as keyof typeof mergedAttrs]
         const n = typeof v === 'number' ? v : Number(v)
         get().upsertKeyframe(elementId, property, t, Number.isFinite(n) ? n : 0)
+        return
+      }
+
+      if (property === 'motionPathOffset') {
+        const trk = tracks.find((x) => x.elementId === elementId && x.property === 'motionPathOffset')
+        let v = 0
+        if (trk) {
+          const s = sampleTrack(trk, t)
+          if (s !== undefined) v = s
+        }
+        get().upsertKeyframe(elementId, property, t, Math.max(0, Math.min(1, v)))
+        return
+      }
+
+      if (property === 'mask') {
+        const raw = mergedAttrs.mask
+        get().upsertKeyframe(elementId, property, t, 0, undefined, {
+          valueText: typeof raw === 'string' ? raw : ''
+        })
+        return
+      }
+
+      if (property === 'clipPath') {
+        const raw = mergedAttrs['clip-path']
+        get().upsertKeyframe(elementId, property, t, 0, undefined, {
+          valueText: typeof raw === 'string' ? raw : ''
+        })
+        return
+      }
+
+      if (property === 'svgFilter') {
+        const raw = mergedAttrs.filter
+        get().upsertKeyframe(elementId, property, t, 0, undefined, {
+          valueText: typeof raw === 'string' ? raw : ''
+        })
+        return
       }
     },
 

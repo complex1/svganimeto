@@ -1,8 +1,17 @@
 import type { VectorAttrValue } from '@/types/document'
 import type { AnimatableProperty, AnimationTrack, EasingId, Keyframe } from '@/types/animation'
 import { applyEasing } from '@/engines/animation/interpolate'
+import { morphPathDApprox } from '@/engines/geometry/svgPathMotion'
 
 const COLOR_PROPS: Set<AnimatableProperty> = new Set(['fill', 'stroke', 'fxShadowColor'])
+
+/** Timeline keyframes use valueText (hold or segment morph for pathD). */
+export const ATTR_TEXT_STEP_PROPERTIES: ReadonlySet<AnimatableProperty> = new Set([
+  'pathD',
+  'mask',
+  'clipPath',
+  'svgFilter'
+])
 
 function sortKeyframes(kfs: Keyframe[]): Keyframe[] {
   return [...kfs].sort((a, b) => a.time - b.time)
@@ -69,9 +78,39 @@ function samplePackedColorTrack(track: AnimationTrack, time: number): number | u
   return ((r & 255) << 16) | ((g & 255) << 8) | (bl & 255)
 }
 
-/** Path `d`: hold previous keyframe text (step). Morphing between strings is not implemented. */
+/** Path `d`: between keyframes, approximate morph; outside, hold last key. */
 export function samplePathDTrack(track: AnimationTrack, time: number): string | undefined {
   if (track.property !== 'pathD') return undefined
+  const kfs = sortKeyframes(track.keyframes).filter((k) => typeof k.valueText === 'string')
+  if (kfs.length === 0) return undefined
+  if (time <= kfs[0].time) return kfs[0].valueText
+  if (time >= kfs[kfs.length - 1].time) return kfs[kfs.length - 1].valueText
+
+  for (let i = 0; i < kfs.length - 1; i++) {
+    const a = kfs[i]!
+    const b = kfs[i + 1]!
+    if (time >= a.time && time <= b.time + 1e-6) {
+      const span = b.time - a.time
+      if (span <= 1e-6) return b.valueText
+      const raw = (time - a.time) / span
+      const eased = applyEasing(raw, b.easing ?? a.easing ?? ('linear' as EasingId))
+      const d0 = a.valueText ?? ''
+      const d1 = b.valueText ?? ''
+      if (!d0 || !d1) return d0 || d1
+      const morphed = morphPathDApprox(d0, d1, eased)
+      return morphed ?? (eased < 0.5 ? d0 : d1)
+    }
+  }
+  return undefined
+}
+
+/** mask / clipPath / svgFilter: step/hold last keyframe with valueText at or before t. */
+export function sampleTextHoldTrack(
+  track: AnimationTrack,
+  time: number,
+  expected: AnimatableProperty
+): string | undefined {
+  if (track.property !== expected) return undefined
   const kfs = sortKeyframes(track.keyframes).filter((k) => typeof k.valueText === 'string')
   if (kfs.length === 0) return undefined
   let best: Keyframe | null = null
@@ -163,6 +202,22 @@ export function mergeAttrsFromTracks(
     if (tr.property === 'fxShadowBlur') {
       const v = sampleNumericAttr(tr, time)
       if (v !== undefined) out.__fxShadowBlur = v
+      continue
+    }
+
+    if (tr.property === 'mask') {
+      const s = sampleTextHoldTrack(tr, time, 'mask')
+      if (s !== undefined) out.mask = s
+      continue
+    }
+    if (tr.property === 'clipPath') {
+      const s = sampleTextHoldTrack(tr, time, 'clipPath')
+      if (s !== undefined) out['clip-path'] = s
+      continue
+    }
+    if (tr.property === 'svgFilter') {
+      const s = sampleTextHoldTrack(tr, time, 'svgFilter')
+      if (s !== undefined) out.filter = s
       continue
     }
   }

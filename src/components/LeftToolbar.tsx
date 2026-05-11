@@ -36,6 +36,13 @@ export function LeftToolbar() {
     { id: 'text', label: 'Text (T)', icon: faFont }
   ]
 
+  const animPathEditOk = mode === 'animate' || mode === 'preview'
+  const toolEnabled = (id: DrawTool) => {
+    if (mode === 'draw') return true
+    if (animPathEditOk && (id === 'select' || id === 'path-edit')) return true
+    return false
+  }
+
   return (
     <aside className="area-toolbar">
       {tools.map((tool) => (
@@ -44,7 +51,7 @@ export function LeftToolbar() {
           type="button"
           title={tool.label}
           className={activeTool === tool.id ? 'primary' : undefined}
-          disabled={mode !== 'draw'}
+          disabled={!toolEnabled(tool.id)}
           style={{ width: 36, height: 36, padding: 0 }}
           onClick={() => setActiveTool(tool.id)}
         >

@@ -46,6 +46,14 @@ export type AnimatableProperty =
   | 'fxShadowBlur'
   /** Shadow color packed like fill. */
   | 'fxShadowColor'
+  /** Normalized 0–1 distance along path referenced by attrs.__motionPathId. */
+  | 'motionPathOffset'
+  /** `mask` presentation attribute (typically url(#id)); keyframe valueText. */
+  | 'mask'
+  /** `clip-path` presentation attribute; keyframe valueText. */
+  | 'clipPath'
+  /** SVG `filter` attribute url(#id) — separate from CSS blur/shadow on __fx*. */
+  | 'svgFilter'
 
 /** Clipboard payload for copy/paste of keyframes (relative times). */
 export type KeyframeClipboardEntry = {

@@ -1,10 +1,27 @@
-import type { CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { nanoid } from 'nanoid'
 import { useEditorStore } from '@/store/editorStore'
 import { flattenForLayers } from '@/engines/document/tree'
-import { mergeTransformFromTracks } from '@/engines/animation/interpolate'
+import { mergeTransformFromTracks, sampleTrack } from '@/engines/animation/interpolate'
+import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
+import type { AnimationTrack } from '@/types/animation'
+import type { VectorElement } from '@/types/document'
 import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
 import type { LinearGradientDef, RadialGradientDef } from '@/types/gradient'
+
+/** Resolved `d` for a path layer at a timeline time (includes pathD track if any). */
+function mergedPathDForLayer(
+  roots: VectorElement[],
+  tracks: AnimationTrack[],
+  pathLayerId: string,
+  timeSec: number
+): string {
+  const node = flattenForLayers(roots).find((x) => x.el.id === pathLayerId)?.el
+  if (!node || node.type !== 'path') return ''
+  const attrs = mergeAttrsFromTracks(node.attrs, pathLayerId, tracks, timeSec)
+  const d = attrs.d
+  return typeof d === 'string' && d.trim().length > 0 ? d : ''
+}
 
 export function RightInspector() {
   const selectedIds = useEditorStore((s) => s.selectedIds)
@@ -15,6 +32,9 @@ export function RightInspector() {
   const updateTransform = useEditorStore((s) => s.updateTransform)
   const pushHistory = useEditorStore((s) => s.pushHistory)
   const setElementAttrs = useEditorStore((s) => s.setElementAttrs)
+  const upsertKeyframe = useEditorStore((s) => s.upsertKeyframe)
+  const setTracks = useEditorStore((s) => s.setTracks)
+  const duration = useEditorStore((s) => s.duration)
   const upsertGradient = useEditorStore((s) => s.upsertGradient)
   const applyBooleanOperation = useEditorStore((s) => s.applyBooleanOperation)
   const mode = useEditorStore((s) => s.mode)
@@ -24,6 +44,15 @@ export function RightInspector() {
 
   const id = selectedIds[0]
   const el = id ? flattenForLayers(elements).find((x) => x.el.id === id)?.el : undefined
+
+  const [morphTargetPathId, setMorphTargetPathId] = useState('')
+  useEffect(() => {
+    setMorphTargetPathId('')
+  }, [id])
+
+  const pathLayersForMotion = useMemo(() => {
+    return flattenForLayers(elements).filter((x) => x.el.type === 'path')
+  }, [elements])
   if (!el) {
     return (
       <aside className="area-inspector">
@@ -285,7 +314,235 @@ export function RightInspector() {
     <aside className="area-inspector">
       <div style={{ padding: 12 }}>
         <div style={{ ...sectionTitleStyle, marginTop: 0 }}>Transform</div>
+        {!isSymbolInstance &&
+          typeof el.attrs.__motionPathId === 'string' &&
+          el.attrs.__motionPathId.trim() !== '' && (
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.35 }}>
+              Motion path is active. The layer rides along the guide path; <strong>X/Y</strong>{' '}
+              now act as a constant offset added on top of the path point. Set them to 0 to snap exactly onto the path.
+            </p>
+          )}
         {activeTransformKeys.map((key) => row(transformLabel[key], key))}
+        {!isSymbolInstance && (
+          <>
+            <div style={sectionTitleStyle}>Motion path</div>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.4 }}>
+              Follow another <strong>path</strong> layer’s curve. At{' '}
+              <code style={{ fontSize: 10 }}>motionPathOffset</code> = 0 the layer sits on the
+              path’s start point; as the offset advances to 1 it travels along the path. Use the
+              slider below (Animate/Preview) — it auto-keyframes at the playhead.
+            </p>
+            <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ color: 'var(--text-muted)' }}>Guide path</span>
+              <select
+                value={
+                  typeof el.attrs.__motionPathId === 'string' ? el.attrs.__motionPathId : ''
+                }
+                disabled={attrsUiLocked}
+                onChange={(e) =>
+                  setElementAttrs(el.id, {
+                    __motionPathId: e.target.value || ''
+                  })
+                }
+                style={{ maxWidth: '100%' }}
+              >
+                <option value="">None</option>
+                {pathLayersForMotion
+                  .filter((p) => p.el.id !== el.id)
+                  .map((p) => (
+                    <option key={p.el.id} value={p.el.id}>
+                      {p.el.name || 'Path'} · {p.el.id}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {typeof el.attrs.__motionPathId === 'string' &&
+              el.attrs.__motionPathId !== '' &&
+              !pathLayersForMotion.some((p) => p.el.id === el.attrs.__motionPathId) && (
+                <p style={{ fontSize: 11, color: 'var(--danger)', margin: '0 0 8px' }}>
+                  Guide path is missing or not a path layer — choose another in the list.
+                </p>
+              )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <input
+                type="checkbox"
+                checked={el.attrs.__motionPathRotate === true || el.attrs.__motionPathRotate === 1}
+                disabled={attrsUiLocked}
+                onChange={(e) => setElementAttrs(el.id, { __motionPathRotate: e.target.checked })}
+              />
+              <span style={{ fontSize: 12 }}>Rotate to path tangent</span>
+            </label>
+            {(() => {
+              if (!el.attrs.__motionPathId || typeof el.attrs.__motionPathId !== 'string') return null
+              const offsetTrack = tracks.find(
+                (t) => t.elementId === el.id && t.property === 'motionPathOffset'
+              )
+              const sampled =
+                offsetTrack && offsetTrack.keyframes.length > 0
+                  ? (sampleTrack(offsetTrack, currentTime) ?? 0)
+                  : 0
+              const offsetVal = Math.max(0, Math.min(1, sampled))
+              const canKey = mode === 'animate' || mode === 'preview'
+              const conflictingTransformTracks = tracks.filter(
+                (t) =>
+                  t.elementId === el.id &&
+                  t.keyframes.length > 0 &&
+                  (t.property === 'x' || t.property === 'y' || t.property === 'rotation')
+              )
+              const replaceMotionTracks = (next: { time: number; value: number }[]) => {
+                const others = useEditorStore
+                  .getState()
+                  .tracks.filter((t) => !(t.elementId === el.id && t.property === 'motionPathOffset'))
+                if (next.length === 0) {
+                  setTracks(others)
+                  return
+                }
+                const newTrack = {
+                  id: nanoid(8),
+                  elementId: el.id,
+                  property: 'motionPathOffset' as const,
+                  keyframes: next.map((k) => ({
+                    id: nanoid(8),
+                    time: Math.max(0, Math.min(duration, k.time)),
+                    value: Math.max(0, Math.min(1, k.value))
+                  }))
+                }
+                setTracks([...others, newTrack])
+              }
+              const clearTransformKeysForElement = () => {
+                const next = useEditorStore
+                  .getState()
+                  .tracks.filter(
+                    (t) =>
+                      !(
+                        t.elementId === el.id &&
+                        (t.property === 'x' || t.property === 'y' || t.property === 'rotation')
+                      )
+                  )
+                setTracks(next)
+              }
+              return (
+                <>
+                  <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ color: 'var(--text-muted)' }} title="0 = path start, 1 = path end">
+                      Offset
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={offsetVal}
+                        disabled={attrsUiLocked || !canKey}
+                        onChange={(e) => {
+                          const v = Math.max(0, Math.min(1, Number(e.target.value)))
+                          upsertKeyframe(el.id, 'motionPathOffset', currentTime, v)
+                        }}
+                        style={{ flex: 1, minWidth: 0 }}
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={Number(offsetVal.toFixed(3))}
+                        disabled={attrsUiLocked || !canKey}
+                        onChange={(e) => {
+                          const v = Math.max(0, Math.min(1, Number(e.target.value)))
+                          if (Number.isFinite(v)) upsertKeyframe(el.id, 'motionPathOffset', currentTime, v)
+                        }}
+                        style={{ width: 64 }}
+                      />
+                    </div>
+                  </label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                    <button
+                      type="button"
+                      disabled={attrsUiLocked || !canKey || duration <= 0}
+                      title="Replace existing offset keyframes with 0 at start and 1 at end of timeline"
+                      onClick={() => {
+                        replaceMotionTracks([
+                          { time: 0, value: 0 },
+                          { time: duration, value: 1 }
+                        ])
+                      }}
+                    >
+                      Set 0→1 over duration
+                    </button>
+                    <button
+                      type="button"
+                      disabled={attrsUiLocked || !canKey}
+                      title="Add a keyframe at the playhead with the current offset"
+                      onClick={() => upsertKeyframe(el.id, 'motionPathOffset', currentTime, offsetVal)}
+                    >
+                      + Keyframe
+                    </button>
+                    <button
+                      type="button"
+                      disabled={
+                        attrsUiLocked || !offsetTrack || (offsetTrack?.keyframes.length ?? 0) === 0
+                      }
+                      title="Remove all motion offset keyframes for this layer"
+                      onClick={() => replaceMotionTracks([])}
+                    >
+                      Clear offset keys
+                    </button>
+                    <button
+                      type="button"
+                      disabled={attrsUiLocked}
+                      title="Reset X/Y/rotation to 0 (and remove their keyframes) so this layer sits exactly on the path"
+                      onClick={() => {
+                        pushHistory()
+                        updateTransform(el.id, { x: 0, y: 0, rotation: 0 }, { skipHistory: true })
+                        clearTransformKeysForElement()
+                      }}
+                    >
+                      Snap onto path
+                    </button>
+                  </div>
+                  {conflictingTransformTracks.length > 0 && (
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--text-muted)',
+                        background: 'rgba(255,180,0,0.08)',
+                        border: '1px solid rgba(255,180,0,0.35)',
+                        borderRadius: 6,
+                        padding: '6px 8px',
+                        marginBottom: 8,
+                        lineHeight: 1.45
+                      }}
+                    >
+                      <strong>Heads up:</strong> this layer has{' '}
+                      {conflictingTransformTracks.map((t) => t.property).join(' / ')} keyframes that
+                      animate position/rotation alongside the motion path — usually one or the
+                      other, not both.
+                      <button
+                        type="button"
+                        style={{
+                          display: 'block',
+                          marginTop: 6,
+                          fontSize: 11,
+                          padding: '3px 8px'
+                        }}
+                        disabled={attrsUiLocked}
+                        onClick={clearTransformKeysForElement}
+                      >
+                        Clear x / y / rotation keyframes for this layer
+                      </button>
+                    </div>
+                  )}
+                  {!canKey && (
+                    <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px' }}>
+                      Switch to <strong>Animate</strong> or <strong>Preview</strong> to set the offset.
+                    </p>
+                  )}
+                </>
+              )
+            })()}
+          </>
+        )}
         {isSymbolInstance && (
           <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.45 }}>
@@ -501,9 +758,149 @@ export function RightInspector() {
               </>
             )}
             {el.type === 'path' && (
-              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 12 }}>
-                Use Path Edit tool to change points and curves.
-              </p>
+              <>
+                <p style={{ margin: '0 0 8px', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45 }}>
+                  Use Path Edit (Draw) to change points and curves.
+                </p>
+                {!isSymbolInstance && (
+                  <>
+                    <div style={sectionTitleStyle}>Path morph</div>
+                    <p style={{ margin: '0 0 8px', color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.45 }}>
+                      Animate the <code style={{ fontSize: 10 }}>d</code> attribute between keyframes on the{' '}
+                      <strong>pathD</strong> timeline track. Shapes blend approximately (same point count along length
+                      works best). Transforms are separate: align layers in Draw if needed.
+                    </p>
+                    <p style={{ margin: '0 0 8px', color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.45 }}>
+                      <strong>Point animation:</strong> in <strong>Animate</strong> or <strong>Preview</strong>, use{' '}
+                      <strong>Path Edit (N)</strong>, scrub the playhead, drag anchors or handles, then release — a{' '}
+                      <strong>pathD</strong> keyframe is saved at that time. Scrub again, reshape, release for the next
+                      pose; playback morphs between those shapes.
+                    </p>
+                    <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Morph toward</span>
+                      <select
+                        value={morphTargetPathId}
+                        disabled={attrsUiLocked}
+                        onChange={(e) => setMorphTargetPathId(e.target.value)}
+                        style={{ maxWidth: '100%' }}
+                      >
+                        <option value="">Choose a path…</option>
+                        {pathLayersForMotion
+                          .filter((p) => p.el.id !== el.id)
+                          .map((p) => (
+                            <option key={p.el.id} value={p.el.id}>
+                              {p.el.name || 'Path'} · {p.el.id}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    {(() => {
+                      const canKey = mode === 'animate' || mode === 'preview'
+                      const pathDTrack = tracks.find((t) => t.elementId === el.id && t.property === 'pathD')
+                      const dSelf0 = mergedPathDForLayer(elements, tracks, el.id, 0)
+                      const dTargetEnd =
+                        morphTargetPathId.length > 0
+                          ? mergedPathDForLayer(elements, tracks, morphTargetPathId, duration)
+                          : ''
+                      const replacePathDMorphKeys = (next: { time: number; valueText: string }[]) => {
+                        const others = useEditorStore
+                          .getState()
+                          .tracks.filter((t) => !(t.elementId === el.id && t.property === 'pathD'))
+                        if (next.length === 0) {
+                          setTracks(others)
+                          return
+                        }
+                        setTracks([
+                          ...others,
+                          {
+                            id: nanoid(8),
+                            elementId: el.id,
+                            property: 'pathD',
+                            keyframes: next.map((k) => ({
+                              id: nanoid(8),
+                              time: Math.max(0, Math.min(duration, k.time)),
+                              value: 0,
+                              valueText: k.valueText
+                            }))
+                          }
+                        ])
+                      }
+                      const dSelfAtPlayhead = mergedPathDForLayer(elements, tracks, el.id, currentTime)
+                      const dTargetAtPlayhead =
+                        morphTargetPathId.length > 0
+                          ? mergedPathDForLayer(elements, tracks, morphTargetPathId, currentTime)
+                          : ''
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            <button
+                              type="button"
+                              disabled={
+                                attrsUiLocked ||
+                                !canKey ||
+                                duration <= 0 ||
+                                !morphTargetPathId ||
+                                !dSelf0 ||
+                                !dTargetEnd
+                              }
+                              title="Replace pathD keys: this layer at t=0 → target path’s shape at t=duration"
+                              onClick={() => {
+                                replacePathDMorphKeys([
+                                  { time: 0, valueText: dSelf0 },
+                                  { time: duration, valueText: dTargetEnd }
+                                ])
+                              }}
+                            >
+                              Morph to target over duration
+                            </button>
+                            <button
+                              type="button"
+                              disabled={attrsUiLocked || !canKey || !dSelfAtPlayhead}
+                              title="pathD keyframe at playhead with this layer’s current shape"
+                              onClick={() =>
+                                upsertKeyframe(el.id, 'pathD', currentTime, 0, undefined, {
+                                  valueText: dSelfAtPlayhead
+                                })
+                              }
+                            >
+                              + Keyframe this shape
+                            </button>
+                            <button
+                              type="button"
+                              disabled={
+                                attrsUiLocked || !canKey || !morphTargetPathId || !dTargetAtPlayhead
+                              }
+                              title="pathD keyframe at playhead using the target path’s shape (same timeline time)"
+                              onClick={() =>
+                                upsertKeyframe(el.id, 'pathD', currentTime, 0, undefined, {
+                                  valueText: dTargetAtPlayhead
+                                })
+                              }
+                            >
+                              + Keyframe target shape
+                            </button>
+                            <button
+                              type="button"
+                              disabled={
+                                attrsUiLocked || !pathDTrack || pathDTrack.keyframes.length === 0
+                              }
+                              title="Remove all pathD keyframes for this layer"
+                              onClick={() => replacePathDMorphKeys([])}
+                            >
+                              Clear pathD keys
+                            </button>
+                          </div>
+                          {!canKey && (
+                            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
+                              Switch to <strong>Animate</strong> or <strong>Preview</strong> to edit path morph keys.
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })()}
+                  </>
+                )}
+              </>
             )}
             {['group', 'polygon', 'polyline', 'text'].includes(el.type) && (
               <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 12 }}>
@@ -795,6 +1192,45 @@ export function RightInspector() {
             }}
           />
         </label>
+
+        {!isSymbolInstance && (
+          <>
+            <div style={sectionTitleStyle}>Mask / clip / SVG filter</div>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.4 }}>
+              Presentation attributes (e.g. <code style={{ fontSize: 10 }}>url(#myMask)</code>). Keyframe{' '}
+              <code style={{ fontSize: 10 }}>mask</code>, <code style={{ fontSize: 10 }}>clipPath</code>,{' '}
+              <code style={{ fontSize: 10 }}>svgFilter</code> on the timeline.
+            </p>
+            <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ color: 'var(--text-muted)' }}>mask</span>
+              <input
+                type="text"
+                value={typeof el.attrs.mask === 'string' ? el.attrs.mask : ''}
+                disabled={attrsUiLocked}
+                onChange={(e) => setElementAttrs(el.id, { mask: e.target.value })}
+              />
+            </label>
+            <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ color: 'var(--text-muted)' }}>clip-path</span>
+              <input
+                type="text"
+                value={typeof el.attrs['clip-path'] === 'string' ? el.attrs['clip-path'] : ''}
+                disabled={attrsUiLocked}
+                onChange={(e) => setElementAttrs(el.id, { 'clip-path': e.target.value })}
+              />
+            </label>
+            <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ color: 'var(--text-muted)' }}>filter</span>
+              <input
+                type="text"
+                placeholder='url(#filterId)'
+                value={typeof el.attrs.filter === 'string' ? el.attrs.filter : ''}
+                disabled={attrsUiLocked}
+                onChange={(e) => setElementAttrs(el.id, { filter: e.target.value })}
+              />
+            </label>
+          </>
+        )}
 
         <div style={sectionTitleStyle}>Alignment</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>

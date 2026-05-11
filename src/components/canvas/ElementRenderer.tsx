@@ -2,11 +2,14 @@ import type { SVGProps } from 'react'
 import type { AnimationTrack } from '@/types/animation'
 import type { SymbolDefinition, VectorElement } from '@/types/document'
 import { mergeTransformFromTracks } from '@/engines/animation/interpolate'
+import { applyMotionPathToTransform } from '@/engines/animation/motionPathApply'
 import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
 import { transformToSvgString } from '@/engines/transform/matrix'
 import { cloneSymbolTemplateForInstance } from '@/engines/document/symbolClone'
+import { pathDragLiveDRef } from '@/components/canvas/pathDragLivePreview'
 
 type Props = {
+  /** Root layers (used for motion-path target lookup). */
   elements: VectorElement[]
   symbols: SymbolDefinition[]
   tracks: AnimationTrack[]
@@ -38,6 +41,23 @@ function cssFilterFromAttrs(attrs: Record<string, unknown>): string | undefined 
     parts.push(`drop-shadow(${sx.toFixed(2)}px ${sy.toFixed(2)}px ${sb.toFixed(2)}px ${sc})`)
   }
   return parts.length ? parts.join(' ') : undefined
+}
+
+/** SVG `filter="url(#id)"` from animation track + CSS blur/shadow from __fx*. */
+function combinedFilterStyle(attrs: Record<string, unknown>): string | undefined {
+  const fx = cssFilterFromAttrs(attrs)
+  const url =
+    typeof attrs.filter === 'string' && attrs.filter.trim().startsWith('url(')
+      ? attrs.filter.trim()
+      : undefined
+  const parts = [url, fx].filter(Boolean) as string[]
+  return parts.length ? parts.join(' ') : undefined
+}
+
+function attrsForShape(merged: VectorElement['attrs']): VectorElement['attrs'] {
+  const o = { ...merged } as Record<string, unknown>
+  delete o.filter
+  return o as VectorElement['attrs']
 }
 
 function InnerShape({ el }: { el: VectorElement }) {
@@ -97,12 +117,14 @@ function El({
   symbols,
   tracks,
   currentTime,
+  rootElements,
   onElementPointerDown
 }: {
   el: VectorElement
   symbols: SymbolDefinition[]
   tracks: AnimationTrack[]
   currentTime: number
+  rootElements: VectorElement[]
   onElementPointerDown: (
     id: string,
     shiftKey: boolean,
@@ -112,10 +134,17 @@ function El({
   ) => void
 }) {
   if (el.visible === false) return null
-  const tr = mergeTransformFromTracks(el.transform, el.id, tracks, currentTime)
+  const tr0 = mergeTransformFromTracks(el.transform, el.id, tracks, currentTime)
+  const tr = applyMotionPathToTransform(tr0, el.attrs, rootElements, tracks, el.id, currentTime)
   const editorTransform = transformToSvgString(tr)
   const mergedAttrs = mergeAttrsFromTracks(el.attrs, el.id, tracks, currentTime) as VectorElement['attrs']
-  const cssFilter = cssFilterFromAttrs(mergedAttrs as Record<string, unknown>)
+  const cssFilter = combinedFilterStyle(mergedAttrs as Record<string, unknown>)
+  const live = pathDragLiveDRef.current
+  const mergedForShape =
+    el.type === 'path' && live?.elementId === el.id
+      ? ({ ...mergedAttrs, d: live.d } as VectorElement['attrs'])
+      : mergedAttrs
+  const shapeAttrs = attrsForShape(mergedForShape)
 
   if (el.type === 'symbolInstance') {
     const sid = String(el.attrs.__symbolId ?? '')
@@ -149,6 +178,7 @@ function El({
           symbols={symbols}
           tracks={tracks}
           currentTime={currentTime}
+          rootElements={rootElements}
           onElementPointerDown={onElementPointerDown}
         />
       </g>
@@ -176,7 +206,7 @@ function El({
           Avoid pointer-events: none on this inner wrapper — in SVG it can prevent descendants
           from receiving hits so groups (e.g. detached symbols) appear unclickable.
         */}
-        <g {...(spreadAttrs(mergedAttrs as Record<string, unknown>) as SVGProps<SVGGElement>)}>
+        <g {...(spreadAttrs(shapeAttrs as Record<string, unknown>) as SVGProps<SVGGElement>)}>
           {(el.children ?? []).map((c) => (
             <El
               key={c.id}
@@ -184,6 +214,7 @@ function El({
               symbols={symbols}
               tracks={tracks}
               currentTime={currentTime}
+              rootElements={rootElements}
               onElementPointerDown={onElementPointerDown}
             />
           ))}
@@ -207,7 +238,7 @@ function El({
         onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
       }}
     >
-      <InnerShape el={{ ...el, attrs: mergedAttrs }} />
+      <InnerShape el={{ ...el, attrs: shapeAttrs }} />
     </g>
   )
 }
@@ -228,6 +259,7 @@ export function ElementRenderer({
           symbols={symbols}
           tracks={tracks}
           currentTime={currentTime}
+          rootElements={elements}
           onElementPointerDown={onElementPointerDown}
         />
       ))}

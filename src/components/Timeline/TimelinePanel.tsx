@@ -25,7 +25,11 @@ const ANIMATABLE_PROPS: AnimatableProperty[] = [
   'fxShadowX',
   'fxShadowY',
   'fxShadowBlur',
-  'fxShadowColor'
+  'fxShadowColor',
+  'motionPathOffset',
+  'mask',
+  'clipPath',
+  'svgFilter'
 ]
 
 const EASING_OPTIONS: { id: EasingId; label: string }[] = [

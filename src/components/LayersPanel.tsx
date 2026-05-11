@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
+  faCopy,
   faEye,
   faEyeSlash,
   faGripVertical,
@@ -47,6 +48,7 @@ export function LayersPanel({ expanded }: { expanded?: boolean }) {
         {flat.map(({ el, depth }) => (
           <li
             key={el.id}
+            title={`${el.type} · id: ${el.id}`}
             className={clsx(selectedIds.includes(el.id) && 'selected')}
             style={{
               paddingLeft: 12 + depth * 14,
@@ -148,6 +150,27 @@ export function LayersPanel({ expanded }: { expanded?: boolean }) {
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => setElementName(el.id, e.target.value)}
             />
+            <button
+              type="button"
+              title={`Copy layer id (${el.id})`}
+              style={{
+                width: 18,
+                height: 18,
+                padding: 0,
+                background: 'transparent',
+                fontSize: 11,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-muted)'
+              }}
+              onClick={(e) => {
+                e.stopPropagation()
+                void navigator.clipboard?.writeText(el.id)
+              }}
+            >
+              <FontAwesomeIcon icon={faCopy} />
+            </button>
             <button
               type="button"
               title="Delete Layer"

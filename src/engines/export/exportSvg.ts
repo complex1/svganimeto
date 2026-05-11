@@ -3,6 +3,7 @@ import type { AnimatableProperty, AnimationTrack } from '@/types/animation'
 import { transformToSvgString } from '@/engines/transform/matrix'
 import { mergeTransformFromTracks } from '@/engines/animation/interpolate'
 import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
+import { applyMotionPathToTransform } from '@/engines/animation/motionPathApply'
 import { flattenTimesForElement } from '@/engines/export/keyframeCss'
 import { cloneSymbolTemplateForInstance } from '@/engines/document/symbolClone'
 
@@ -51,7 +52,37 @@ function effectStyleFromAttrs(attrs: Record<string, unknown>): string {
   return parts.join(' ')
 }
 
-const PAINT_ANIM_PROPS: AnimatableProperty[] = ['fill', 'stroke', 'strokeWidth', 'pathD']
+function effectAndSvgFilterFromAttrs(attrs: Record<string, unknown>): string {
+  const fx = effectStyleFromAttrs(attrs)
+  const url =
+    typeof attrs.filter === 'string' && attrs.filter.trim().startsWith('url(')
+      ? attrs.filter.trim()
+      : undefined
+  const parts = [url, fx].filter(Boolean) as string[]
+  return parts.join(' ')
+}
+
+function stripFilterForInner(attrs: Record<string, string | number>): Record<string, string | number> {
+  const rest = { ...attrs }
+  delete rest.filter
+  return rest
+}
+
+function attrsWithoutSvgFilterUrl(attrs: Record<string, unknown>): Record<string, unknown> {
+  const rest = { ...attrs }
+  delete rest.filter
+  return rest
+}
+
+const PAINT_ANIM_PROPS: AnimatableProperty[] = [
+  'fill',
+  'stroke',
+  'strokeWidth',
+  'pathD',
+  'mask',
+  'clipPath',
+  'svgFilter'
+]
 
 function hasPaintAnimation(elId: string, tracks: AnimationTrack[]): boolean {
   return tracks.some(
@@ -70,9 +101,10 @@ function renderInner(
   tracks: AnimationTrack[] | undefined,
   timeSec: number
 ): string {
-  const merged = tracks
+  const mergedRaw = tracks
     ? (mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, string | number>)
     : (el.attrs as Record<string, string | number>)
+  const merged = stripFilterForInner(mergedRaw)
   const idAttr = ` id="${escapeXml(paintTargetId(el))}"`
   if (el.type === 'symbolInstance') {
     const sid = String(el.attrs.__symbolId ?? '')
@@ -101,14 +133,19 @@ function renderElement(
   tracks: AnimationTrack[] | undefined,
   timeSec: number
 ): string {
-  const t = el.transform
-  const editorT = transformToSvgString(t)
-  const op = t.opacity !== 1 ? ` opacity="${t.opacity}"` : ''
+  let tr = el.transform
+  if (tracks) {
+    let mt = mergeTransformFromTracks(el.transform, el.id, tracks, timeSec)
+    mt = applyMotionPathToTransform(mt, el.attrs, project.elements, tracks, el.id, timeSec)
+    tr = mt
+  }
+  const editorT = transformToSvgString(tr)
+  const op = tr.opacity !== 1 ? ` opacity="${tr.opacity}"` : ''
   const attrForFx = tracks
     ? (mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, unknown>)
     : (el.attrs as Record<string, unknown>)
-  const effectStyle = effectStyleFromAttrs(attrForFx)
-  const style = effectStyle ? ` style="filter:${effectStyle};"` : ''
+  const combinedFx = effectAndSvgFilterFromAttrs(attrForFx)
+  const style = combinedFx ? ` style="filter:${escapeXml(combinedFx)};"` : ''
   const inner = renderInner(el, project, tracks, timeSec)
   return `<g id="el_${el.id}" transform="${escapeXml(editorT)}"${op}${style}>${inner}</g>`
 }
@@ -152,12 +189,13 @@ function buildKeyframesCss(
     const name = `xfm_el_${el.id}`
     const keyframeBlocks = times.map((time) => {
       const pct = durationSec > 0 ? ((time / durationSec) * 100).toFixed(4) : '0'
-      const mergedT = mergeTransformFromTracks(el.transform, el.id, tracks, time)
+      let mergedT = mergeTransformFromTracks(el.transform, el.id, tracks, time)
+      mergedT = applyMotionPathToTransform(mergedT, el.attrs, elements, tracks, el.id, time)
       const tr = transformToSvgString(mergedT)
       const op = mergedT.opacity !== 1 ? `opacity:${mergedT.opacity};` : ''
       const mergedAttrs = mergeAttrsFromTracks(el.attrs, el.id, tracks, time) as Record<string, unknown>
-      const fx = effectStyleFromAttrs(mergedAttrs)
-      const filt = fx ? `filter:${fx};` : ''
+      const fxOnly = effectStyleFromAttrs(attrsWithoutSvgFilterUrl(mergedAttrs))
+      const filt = fxOnly ? `filter:${fxOnly};` : ''
       return `  ${pct}% { transform:${tr}; ${op} ${filt} }`
     })
     rules.push(`@keyframes ${name} {\n${keyframeBlocks.join('\n')}\n}`)
@@ -180,7 +218,16 @@ function buildKeyframesCss(
         if (typeof mergedAttrs.d === 'string' && mergedAttrs.d.length > 0) {
           decls.push(`d:path(${JSON.stringify(mergedAttrs.d)})`)
         }
-        return `  ${pct}% { ${decls.join(';')} }`
+        if (typeof mergedAttrs.mask === 'string' && mergedAttrs.mask.length > 0) {
+          decls.push(`mask:${mergedAttrs.mask}`)
+        }
+        if (typeof mergedAttrs['clip-path'] === 'string' && mergedAttrs['clip-path'].length > 0) {
+          decls.push(`clip-path:${mergedAttrs['clip-path']}`)
+        }
+        if (typeof mergedAttrs.filter === 'string' && mergedAttrs.filter.startsWith('url(')) {
+          decls.push(`filter:${mergedAttrs.filter}`)
+        }
+        return `  ${pct}% { ${decls.length ? decls.join(';') : 'opacity:1'} }`
       })
       rules.push(`@keyframes ${pname} {\n${paintBlocks.join('\n')}\n}`)
       rules.push(`#${pname} { animation-name: ${pname}; ${animCommon}; }`)
@@ -200,38 +247,36 @@ export function exportStillFrameSvg(project: Project, tracks: AnimationTrack[], 
       return renderInnerAtTime(clone)
     }
     if (el.type === 'group') {
-      const merged = mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<
-        string,
-        string | number
-      >
+      const merged = stripFilterForInner(
+        mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, string | number>
+      )
       const kids = (el.children ?? []).map((c) => renderElementAtTime(c)).join('')
       return `<g id="${escapeXml(paintTargetId(el))}" ${attrsToString(merged)}>${kids}</g>`
     }
     if (el.type === 'text') {
-      const merged = mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<
-        string,
-        string | number
-      >
+      const merged = stripFilterForInner(
+        mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, string | number>
+      )
       const { __textContent, ...rest } = merged
       const inner = typeof __textContent === 'string' ? __textContent : ''
       return `<text id="${escapeXml(paintTargetId(el))}" ${attrsToString(rest)}>${escapeXml(inner)}</text>`
     }
-    const mergedA = mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<
-      string,
-      string | number
-    >
+    const mergedA = stripFilterForInner(
+      mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, string | number>
+    )
     const tag =
       el.type === 'polygon' ? 'polygon' : el.type === 'polyline' ? 'polyline' : el.type
     return `<${tag} id="${escapeXml(paintTargetId(el))}" ${attrsToString(mergedA)} />`
   }
 
   function renderElementAtTime(el: VectorElement): string {
-    const merged = mergeTransformFromTracks(el.transform, el.id, tracks, timeSec)
+    let merged = mergeTransformFromTracks(el.transform, el.id, tracks, timeSec)
+    merged = applyMotionPathToTransform(merged, el.attrs, project.elements, tracks, el.id, timeSec)
     const editorT = transformToSvgString(merged)
     const op = merged.opacity !== 1 ? ` opacity="${merged.opacity}"` : ''
     const mergedFx = mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, unknown>
-    const effectStyle = effectStyleFromAttrs(mergedFx)
-    const style = effectStyle ? ` style="filter:${effectStyle};"` : ''
+    const combinedFx = effectAndSvgFilterFromAttrs(mergedFx)
+    const style = combinedFx ? ` style="filter:${escapeXml(combinedFx)};"` : ''
     const inner = renderInnerAtTime(el)
     return `<g id="el_${el.id}" transform="${escapeXml(editorT)}"${op}${style}>${inner}</g>`
   }

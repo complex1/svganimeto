@@ -1,11 +1,13 @@
 import { nanoid } from 'nanoid'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faChevronDown, faChevronRight, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons'
 import { useEditorStore } from '@/store/editorStore'
 import { dialogAlert, dialogConfirm } from '@/store/dialogStore'
 import { ElementRenderer } from '@/components/canvas/ElementRenderer'
+import { pathDragLiveDRef } from '@/components/canvas/pathDragLivePreview'
 import { SelectionOverlay } from '@/components/canvas/SelectionOverlay'
+import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
 import { defaultTransform, type VectorElement } from '@/types/document'
 import { flattenForLayers, updateElementById } from '@/engines/document/tree'
 import type { DrawTool } from '@/store/editorStore'
@@ -455,6 +457,7 @@ export function Canvas() {
   const setElementAttrs = useEditorStore((s) => s.setElementAttrs)
   const setElements = useEditorStore((s) => s.setElements)
   const pushHistory = useEditorStore((s) => s.pushHistory)
+  const upsertKeyframe = useEditorStore((s) => s.upsertKeyframe)
   const applyEraserStroke = useEditorStore((s) => s.applyEraserStroke)
   const canvasGuideType = useEditorStore((s) => s.canvasGuideType)
   const canvasGuideSpacing = useEditorStore((s) => s.canvasGuideSpacing)
@@ -670,31 +673,37 @@ export function Canvas() {
     [addElement, pencilSettings.smoothing, pencilSettings.color, pencilSettings.strokeWidth, project.elements.length]
   )
 
-  const selectedPath = (() => {
+  const selectedPath = useMemo(() => {
     if (selectedIds.length !== 1) return null
-    const id = selectedIds[0]
+    const id = selectedIds[0]!
     const el = flattenForLayers(project.elements).find((x) => x.el.id === id)?.el
     if (!el || el.type !== 'path') return null
-    const points = Array.isArray(el.attrs.__pathPoints)
-      ? (el.attrs.__pathPoints as PathPoint[])
-      : typeof el.attrs.d === 'string'
-        ? parsePathDToPoints(el.attrs.d)?.points ?? null
+    const animUi = mode === 'animate' || mode === 'preview'
+    const attrs = animUi ? mergeAttrsFromTracks(el.attrs, id, tracks, currentTime) : el.attrs
+    const points = Array.isArray(attrs.__pathPoints)
+      ? (attrs.__pathPoints as PathPoint[])
+      : typeof attrs.d === 'string'
+        ? parsePathDToPoints(attrs.d)?.points ?? null
         : null
     if (!points || points.length === 0) return null
     const closed =
-      typeof el.attrs.__pathClosed === 'boolean'
-        ? el.attrs.__pathClosed
-        : typeof el.attrs.d === 'string'
-          ? Boolean(parsePathDToPoints(el.attrs.d)?.closed)
+      typeof attrs.__pathClosed === 'boolean'
+        ? attrs.__pathClosed
+        : typeof attrs.d === 'string'
+          ? Boolean(parsePathDToPoints(attrs.d)?.closed)
           : false
     return { id: el.id, points, closed }
-  })()
+  }, [selectedIds, project.elements, tracks, currentTime, mode])
   const selectedPathNode =
     selectedPath && svgRef.current
       ? (svgRef.current.querySelector(
           `[data-el-id="${CSS.escape(selectedPath.id)}"]`
         ) as SVGGraphicsElement | null)
       : null
+
+  useEffect(() => {
+    pathDragLiveDRef.current = null
+  }, [selectedIds, mode, activeTool])
 
   const marqueeRect =
     marquee
@@ -995,6 +1004,7 @@ export function Canvas() {
         return
       }
       if (
+        mode === 'draw' &&
         activeTool === 'path-edit' &&
         clicked &&
         clicked.type !== 'path' &&
@@ -1359,10 +1369,14 @@ export function Canvas() {
           pt.outY = p.y
           syncOppositeHandle(points, d.idx, 'out', pt.mode ?? 'corner', true)
         }
+        const dStr = pathDFromPoints(points, selectedPath.closed)
+        if (mode === 'animate' || mode === 'preview') {
+          pathDragLiveDRef.current = { elementId: selectedPath.id, d: dStr }
+        }
         setElementAttrs(selectedPath.id, {
           __pathPoints: points,
           __pathClosed: selectedPath.closed,
-          d: pathDFromPoints(points, selectedPath.closed)
+          d: dStr
         }, { skipHistory: true })
       }
     }
@@ -1476,6 +1490,22 @@ export function Canvas() {
       } catch {
         /* ignore */
       }
+      const st = useEditorStore.getState()
+      if (
+        (st.mode === 'animate' || st.mode === 'preview') &&
+        !st.isPlaying &&
+        st.selectedIds.length === 1
+      ) {
+        const pid = st.selectedIds[0]!
+        const node = flattenForLayers(st.project.elements).find((x) => x.el.id === pid)?.el
+        if (node?.type === 'path' && !node.locked) {
+          const d = typeof node.attrs.d === 'string' ? node.attrs.d : ''
+          if (d.length > 0) {
+            upsertKeyframe(pid, 'pathD', st.currentTime, 0, undefined, { valueText: d })
+          }
+        }
+      }
+      pathDragLiveDRef.current = null
     }
     if (draft) {
       const d = draft
@@ -1585,7 +1615,7 @@ export function Canvas() {
   }
 
   const canvasCursor =
-    mode === 'draw' &&
+    (mode === 'draw' || activeTool === 'path-edit') &&
     activeTool !== 'select' &&
     activeTool !== 'shape-builder'
       ? activeTool === 'text'
