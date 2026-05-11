@@ -14,6 +14,7 @@ import { useEditorStore } from '@/store/editorStore'
 import { usePlaybackLoop } from '@/hooks/usePlaybackLoop'
 import { GsapTimelineDevPanel } from '@/components/dev/GsapTimelineDevPanel'
 import { RasterImportModal } from '@/components/RasterImportModal'
+import { PreviewFullscreenOverlay } from '@/components/preview/PreviewFullscreenOverlay'
 import {
   applyImportedSvg,
   importSvgFile,
@@ -87,6 +88,7 @@ export default function App() {
         void importSvgFile()
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (mode === 'preview') return
         const t = e.target as HTMLElement
         if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
         e.preventDefault()
@@ -119,30 +121,36 @@ export default function App() {
       <DialogHost />
       <TraceOverlay />
       <RasterImportModal />
-      <TopBar />
-      <SymbolEditBanner />
-      <div className="app-layout">
-        <LeftToolbar />
-        <main className="area-center">
-          <Canvas />
-        </main>
-        <RightInspector />
-        <div
-          className="area-bottom"
-          style={{ display: 'flex', flexDirection: 'row', minHeight: 0, minWidth: 0 }}
-        >
-          <LayersPanel expanded={mode === 'draw'} />
-          {mode === 'draw' && <SymbolsPanel expanded={mode === 'draw'} />}
-          {(mode === 'animate' || mode === 'preview') && (
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-              <TimelinePanel />
+      {mode === 'preview' ? (
+        <PreviewFullscreenOverlay />
+      ) : (
+        <>
+          <TopBar />
+          <SymbolEditBanner />
+          <div className="app-layout">
+            <LeftToolbar />
+            <main className="area-center">
+              <Canvas />
+            </main>
+            <RightInspector />
+            <div
+              className="area-bottom"
+              style={{ display: 'flex', flexDirection: 'row', minHeight: 0, minWidth: 0 }}
+            >
+              <LayersPanel expanded={mode === 'draw'} />
+              {mode === 'draw' && <SymbolsPanel expanded={mode === 'draw'} />}
+              {mode === 'animate' && (
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                  <TimelinePanel />
+                </div>
+              )}
+              {mode === 'export' && (
+                <div style={{ flex: 1, padding: 12, color: 'var(--text-muted)' }}>Use the export dialog.</div>
+              )}
             </div>
-          )}
-          {mode === 'export' && (
-            <div style={{ flex: 1, padding: 12, color: 'var(--text-muted)' }}>Use the export dialog.</div>
-          )}
-        </div>
-      </div>
+          </div>
+        </>
+      )}
       {exportOpen && (
         <ExportDialog
           onClose={() => {

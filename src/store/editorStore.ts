@@ -589,7 +589,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
         else if ((m === 'animate' || m === 'preview') && nextTool !== 'select' && nextTool !== 'path-edit') {
           nextTool = 'select'
         }
-        return { mode: m, activeTool: nextTool }
+        return {
+          mode: m,
+          activeTool: nextTool,
+          ...(m !== s.mode ? { isPlaying: false } : {})
+        }
       }),
     setActiveTool: (tool) => set({ activeTool: tool }),
     setAutoKeyframe: (v) => set({ autoKeyframe: v }),
