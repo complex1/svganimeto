@@ -696,10 +696,19 @@ export const useEditorStore = create<EditorState>((set, get) => {
       set({ currentTime: Math.max(0, Math.min(d, t)) })
     },
     setDuration: (d) =>
-      set((s) => ({
-        duration: Math.max(0.1, d),
-        currentTime: Math.min(s.currentTime, Math.max(0.1, d))
-      })),
+      set((s) => {
+        const duration = Math.max(0.1, d)
+        return {
+          duration,
+          currentTime: Math.min(s.currentTime, duration),
+          tracks: s.tracks.map((tr) => ({
+            ...tr,
+            keyframes: tr.keyframes
+              .map((k) => ({ ...k, time: Math.min(k.time, duration) }))
+              .sort((a, b) => a.time - b.time)
+          }))
+        }
+      }),
     setFps: (f) => set({ fps: Math.max(1, Math.min(120, f)) }),
     setPlaybackSpeed: (n) => set({ playbackSpeed: Math.max(0.05, Math.min(8, n)) }),
     setLoop: (v) => set({ loop: v }),

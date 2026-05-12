@@ -16,20 +16,23 @@ import { GsapTimelineDevPanel } from '@/components/dev/GsapTimelineDevPanel'
 import { RasterImportModal } from '@/components/RasterImportModal'
 import { PreviewFullscreenOverlay } from '@/components/preview/PreviewFullscreenOverlay'
 import { ResizeHandle } from '@/components/ResizeHandle'
+import { HomeScreen } from '@/components/HomeScreen'
 import { useWorkspaceLayout } from '@/hooks/useWorkspaceLayout'
+import { useSessionStore } from '@/store/sessionStore'
 import {
   applyImportedSvg,
   importSvgFile,
+  newProjectFile,
   openProjectFile,
   openRasterVectorizeWizard,
   saveProjectFile
 } from '@/ipc/fileActions'
 
 export default function App() {
+  const screen = useSessionStore((s) => s.screen)
   const mode = useEditorStore((s) => s.mode)
   const setMode = useEditorStore((s) => s.setMode)
   const setActiveTool = useEditorStore((s) => s.setActiveTool)
-  const newProject = useEditorStore((s) => s.newProject)
   const undo = useEditorStore((s) => s.undo)
   const redo = useEditorStore((s) => s.redo)
   const deleteSelected = useEditorStore((s) => s.deleteSelected)
@@ -47,11 +50,11 @@ export default function App() {
     const api = window.api
     if (!api?.onMenuAction) return
     return api.onMenuAction((action) => {
-      if (action === 'file:new') newProject()
+      if (action === 'file:new') void newProjectFile()
       if (action === 'file:open') void openProjectFile()
       if (action === 'file:save') void saveProjectFile()
     })
-  }, [newProject])
+  }, [])
 
   useEffect(() => {
     const api = window.api
@@ -142,6 +145,15 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo, deleteSelected, mode, setActiveTool])
+
+  if (screen === 'home') {
+    return (
+      <div className="app-root">
+        <DialogHost />
+        <HomeScreen />
+      </div>
+    )
+  }
 
   return (
     <div className="app-root">

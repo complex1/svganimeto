@@ -1,5 +1,7 @@
 import { useEditorStore } from '@/store/editorStore'
 import { dialogAlert } from '@/store/dialogStore'
+import { saveActiveProject, openProjectFromDialog, createNewProjectAndOpen } from '@/ipc/projectActions'
+import { useSessionStore } from '@/store/sessionStore'
 import { humanizeTraceStatus, traceBitmapWithConfig } from '@/engines/importer/rasterTrace'
 import {
   buildTracerOptionsFromWizard,
@@ -37,17 +39,25 @@ function guardSymbolEditing(): boolean {
 }
 
 export async function openProjectFile() {
-  if (guardSymbolEditing()) return
+  const opened = await openProjectFromDialog()
+  if (opened) return
   const api = window.api
   if (!api?.openProject) return
   const res = await api.openProject()
   if (!res) return
   useEditorStore.getState().hydrateFromJson(res.content)
   useEditorStore.setState({ projectPath: res.path })
+  useSessionStore.getState().setActiveStorageUri(`file:${res.path}`)
+  useSessionStore.getState().setScreen('editor')
 }
 
 export async function saveProjectFile() {
   if (guardSymbolEditing()) return
+  const activeStorageUri = useSessionStore.getState().activeStorageUri
+  if (activeStorageUri) {
+    await saveActiveProject()
+    return
+  }
   const api = window.api
   const json = useEditorStore.getState().serializeProject()
   const name = `${useEditorStore.getState().project.name || 'project'}.svgmotion`
@@ -57,7 +67,14 @@ export async function saveProjectFile() {
     return
   }
   const path = await api.saveProject(json, name)
-  if (path) useEditorStore.setState({ projectPath: path })
+  if (path) {
+    useEditorStore.setState({ projectPath: path })
+    useSessionStore.getState().setActiveStorageUri(`file:${path}`)
+  }
+}
+
+export async function newProjectFile() {
+  await createNewProjectAndOpen()
 }
 
 export async function importSvgFile() {

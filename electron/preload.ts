@@ -7,9 +7,30 @@ export type SaveExportPayload = {
   filters?: { name: string; extensions: string[] }[]
 }
 
+export type ProjectRecord = {
+  id: string
+  name: string
+  storageUri: string
+  createdAt: number
+  updatedAt: number
+}
+
+export type ProjectWriteInput = {
+  storageUri?: string | null
+  json: string
+  name?: string
+}
+
 export type ElectronAPI = {
   openProject: () => Promise<{ path: string; content: string } | null>
   saveProject: (content: string, suggestedName?: string) => Promise<string | null>
+  projectLibrary?: {
+    list: () => Promise<ProjectRecord[]>
+    read: (storageUri: string) => Promise<string>
+    write: (input: ProjectWriteInput) => Promise<ProjectRecord>
+    delete: (storageUri: string) => Promise<void>
+    openFromDialog: () => Promise<{ record: ProjectRecord; json: string } | null>
+  }
   importSvg: () => Promise<{ path: string; content: string } | null>
   importRaster: () => Promise<{ path: string; dataUrl: string } | null>
   exportSvg: (content: string, suggestedName?: string) => Promise<string | null>
@@ -49,6 +70,13 @@ ipcRenderer.on('menu:importRasterData', (_event, data: RasterPayload) => {
 const api: ElectronAPI = {
   openProject: () => ipcRenderer.invoke('dialog:openProject'),
   saveProject: (content, suggestedName) => ipcRenderer.invoke('dialog:saveProject', content, suggestedName),
+  projectLibrary: {
+    list: () => ipcRenderer.invoke('projectLibrary:list'),
+    read: (storageUri) => ipcRenderer.invoke('projectLibrary:read', storageUri),
+    write: (input) => ipcRenderer.invoke('projectLibrary:write', input),
+    delete: (storageUri) => ipcRenderer.invoke('projectLibrary:delete', storageUri),
+    openFromDialog: () => ipcRenderer.invoke('projectLibrary:openFromDialog')
+  },
   importSvg: () => ipcRenderer.invoke('dialog:importSvg'),
   importRaster: () => ipcRenderer.invoke('dialog:importRaster'),
   exportSvg: (content, suggestedName) => ipcRenderer.invoke('dialog:exportSvg', content, suggestedName),

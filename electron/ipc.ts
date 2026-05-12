@@ -1,6 +1,13 @@
 import { ipcMain, dialog, app, BrowserWindow } from 'electron'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import {
+  deleteLibraryProject,
+  listLibraryProjects,
+  readLibraryProject,
+  registerExternalProjectFile,
+  writeLibraryProject
+} from './projectLibrary'
 
 const PROJECT_FILTER = { name: 'SVG Motion Project', extensions: ['svgmotion', 'json'] }
 const SVG_FILTER = { name: 'SVG', extensions: ['svg'] }
@@ -149,5 +156,28 @@ export function registerIpcHandlers() {
       defaultFileName: suggestedName ?? 'export.svg',
       filters: [{ name: 'SVG', extensions: ['svg'] }]
     })
+  })
+
+  ipcMain.handle('projectLibrary:list', () => listLibraryProjects())
+
+  ipcMain.handle('projectLibrary:read', (_event, storageUri: string) => readLibraryProject(storageUri))
+
+  ipcMain.handle('projectLibrary:write', (_event, input) => writeLibraryProject(input))
+
+  ipcMain.handle('projectLibrary:delete', (_event, storageUri: string) =>
+    deleteLibraryProject(storageUri)
+  )
+
+  ipcMain.handle('projectLibrary:openFromDialog', async (event) => {
+    const parent = senderWindow(event)
+    const { canceled, filePaths } = await dialog.showOpenDialog(parent, {
+      title: 'Open project',
+      filters: ALL_PROJECTS,
+      properties: ['openFile']
+    })
+    if (canceled || !filePaths[0]) return null
+    const content = await fs.readFile(filePaths[0], 'utf-8')
+    const record = await registerExternalProjectFile(filePaths[0], content)
+    return { record, json: content }
   })
 }

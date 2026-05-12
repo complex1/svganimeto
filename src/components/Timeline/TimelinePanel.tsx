@@ -90,7 +90,7 @@ export function TimelinePanel() {
   const [rulerMode, setRulerMode] = useState<'seconds' | 'frames'>('seconds')
   const [addKfProperty, setAddKfProperty] = useState<AnimatableProperty>('x')
 
-  const rulerRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const laneMarqueeRef = useRef<{
     trackId: string
     shiftKey: boolean
@@ -178,11 +178,16 @@ export function TimelinePanel() {
     return t
   }
 
+  const timeFromClientX = (clientX: number, laneLeft: number) => {
+    const scrollLeft = scrollRef.current?.scrollLeft ?? 0
+    const x = clientX - laneLeft + scrollLeft
+    return Math.max(0, Math.min(duration, x / pxPerSec))
+  }
+
   const onRulerPointer = (e: React.PointerEvent) => {
-    if (!rulerRef.current) return
-    const rect = rulerRef.current.getBoundingClientRect()
-    const x = e.clientX - rect.left + rulerRef.current.scrollLeft - TRACK_LABEL_WIDTH
-    const raw = Math.max(0, Math.min(duration, x / pxPerSec))
+    if (!scrollRef.current) return
+    const rect = scrollRef.current.getBoundingClientRect()
+    const raw = timeFromClientX(e.clientX, rect.left)
     setCurrentTime(snapTime(raw, snapToFrame, fps, duration))
   }
 
@@ -282,10 +287,9 @@ export function TimelinePanel() {
     laneEl: HTMLDivElement
   ) => {
     if (e.button !== 0) return
-    if ((e.target as HTMLElement).closest('.keyframe-dot')) return
-    const parentScroll = laneEl.parentElement?.scrollLeft ?? 0
+    if ((e.target as HTMLElement).closest('.keyframe-dot, .keyframe-dot-anchor')) return
     const rect = laneEl.getBoundingClientRect()
-    const x = e.clientX - rect.left + parentScroll
+    const x = e.clientX - rect.left + (scrollRef.current?.scrollLeft ?? 0)
     laneMarqueeRef.current = {
       trackId: track.id,
       shiftKey: e.shiftKey,
@@ -299,7 +303,7 @@ export function TimelinePanel() {
       const m = laneMarqueeRef.current
       if (!m || ev.pointerId !== m.pointerId) return
       const r = laneEl.getBoundingClientRect()
-      const nx = ev.clientX - r.left + (laneEl.parentElement?.scrollLeft ?? 0)
+      const nx = ev.clientX - r.left + (scrollRef.current?.scrollLeft ?? 0)
       m.endX = nx
       setLaneMarqueeUi({ trackId: m.trackId, startX: m.startX, endX: nx })
     }
@@ -456,145 +460,142 @@ export function TimelinePanel() {
           />
         </label>
       </div>
-      <div
-        ref={rulerRef}
-        className="timeline-ruler"
-        style={{ overflowX: 'auto', position: 'relative', minHeight: 28 }}
-        onPointerDown={(e) => {
-          onRulerPointer(e)
-        }}
-        onPointerMove={(e) => {
-          if (e.buttons === 1) onRulerPointer(e)
-        }}
-      >
-        <div
-          style={{
-            width: TRACK_LABEL_WIDTH + duration * pxPerSec,
-            height: '100%',
-            position: 'relative'
-          }}
-        >
-          <div
-            style={{
-              position: 'absolute',
-              left: TRACK_LABEL_WIDTH,
-              top: 0,
-              bottom: 0,
-              width: 1,
-              background: 'var(--border)'
-            }}
-          />
-          {(() => {
-            const minorStep = timelineZoom >= 2 ? 0.1 : timelineZoom >= 1 ? 0.25 : 0.5
-            const ticks = Math.floor(duration / minorStep)
-            return Array.from({ length: ticks + 1 }).map((_, i) => {
-              const t = i * minorStep
-              const x = TRACK_LABEL_WIDTH + t * pxPerSec
-              const isMajor = Math.abs(t - Math.round(t)) < 1e-6
-              const isHalf = !isMajor && Math.abs(t * 2 - Math.round(t * 2)) < 1e-6
-              const tickHeight = isMajor ? 18 : isHalf ? 12 : 8
-              const majorLabel =
-                rulerMode === 'frames' && isMajor ? `${Math.round(t * fps)}f` : `${t}s`
-              return (
-                <div key={`${t.toFixed(4)}`}>
-                  <div
-                    style={{
-                      position: 'absolute',
-                      left: x,
-                      top: 0,
-                      width: 1,
-                      height: tickHeight,
-                      background: isMajor ? 'var(--text-muted)' : 'var(--border)'
-                    }}
-                  />
-                  {isMajor && (
-                    <span
-                      style={{
-                        position: 'absolute',
-                        left: x + 4,
-                        top: 2,
-                        fontSize: 10,
-                        color: 'var(--text-muted)',
-                        userSelect: 'none'
-                      }}
-                    >
-                      {majorLabel}
-                    </span>
-                  )}
-                </div>
-              )
-            })
-          })()}
-          <div
-            className="playhead"
-            style={{ left: TRACK_LABEL_WIDTH + currentTime * pxPerSec }}
-          />
+      <div className="timeline-body">
+        <div className="timeline-label-column" style={{ width: TRACK_LABEL_WIDTH }}>
+          <div className="timeline-ruler-gutter" aria-hidden />
+          {rows.map(({ track, label }) => (
+            <Tooltip
+              key={track.id}
+              content={label}
+              anchorClassName="tooltip-anchor--block"
+              anchorStyle={{ width: '100%', minWidth: 0 }}
+            >
+              <div className="track-label">{label}</div>
+            </Tooltip>
+          ))}
         </div>
-      </div>
-      <div style={{ flex: 1, overflow: 'auto' }}>
-        {rows.length === 0 ? (
-          <p style={{ padding: 12, color: 'var(--text-muted)', fontSize: 12 }}>Add motion in Animate mode — keyframes appear here.</p>
-        ) : (
-          rows.map(({ track, label }) => (
-            <div key={track.id} className="track-row">
-              <Tooltip content={label} anchorClassName="tooltip-anchor--block" anchorStyle={{ width: '100%', minWidth: 0 }}>
-                <div className="track-label">{label}</div>
-              </Tooltip>
-              <div
-                className="track-lane"
-                style={{ position: 'relative', minWidth: duration * pxPerSec }}
-                onPointerDown={(e) => onLaneBackgroundPointerDown(e, track, e.currentTarget)}
-              >
-                {laneMarqueeUi?.trackId === track.id && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 2,
-                      bottom: 2,
-                      left: Math.min(laneMarqueeUi.startX, laneMarqueeUi.endX),
-                      width: Math.abs(laneMarqueeUi.endX - laneMarqueeUi.startX),
-                      background: 'rgba(91,141,239,0.2)',
-                      border: '1px dashed #5b8def',
-                      pointerEvents: 'none',
-                      zIndex: 1
-                    }}
-                  />
-                )}
-                {track.keyframes.map((k) => {
-                  const keyframeTooltip =
-                    k.valueText !== undefined
-                      ? `${k.time}s — ${k.value} — ${k.valueText.length > 48 ? `${k.valueText.slice(0, 48)}…` : k.valueText}`
-                      : `${k.time}s — ${k.value}`
+        <div ref={scrollRef} className="timeline-scroll">
+          <div className="timeline-time-inner" style={{ width: duration * pxPerSec, minWidth: '100%' }}>
+            <div
+              className="timeline-ruler"
+              onPointerDown={onRulerPointer}
+              onPointerMove={(e) => {
+                if (e.buttons === 1) onRulerPointer(e)
+              }}
+            >
+              {(() => {
+                const minorStep = timelineZoom >= 2 ? 0.1 : timelineZoom >= 1 ? 0.25 : 0.5
+                const ticks = Math.floor(duration / minorStep)
+                return Array.from({ length: ticks + 1 }).map((_, i) => {
+                  const t = i * minorStep
+                  const x = t * pxPerSec
+                  const isMajor = Math.abs(t - Math.round(t)) < 1e-6
+                  const isHalf = !isMajor && Math.abs(t * 2 - Math.round(t * 2)) < 1e-6
+                  const tickHeight = isMajor ? 18 : isHalf ? 12 : 8
+                  const majorLabel =
+                    rulerMode === 'frames' && isMajor ? `${Math.round(t * fps)}f` : `${t}s`
                   return (
-                    <Tooltip key={k.id} content={keyframeTooltip}>
+                    <div key={`${t.toFixed(4)}`}>
                       <div
-                        className={`keyframe-dot${selectedKfSet.has(selectionKey(track.id, k.id)) ? ' keyframe-dot--selected' : ''}`}
-                        style={{ left: k.time * pxPerSec }}
-                        onPointerDown={(e) => beginKeyframeDrag(e, track, k)}
-                        onContextMenu={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          setKeyframeMenu({
-                            left: e.clientX,
-                            top: e.clientY,
-                            trackId: track.id,
-                            elementId: track.elementId,
-                            property: track.property,
-                            keyframeId: k.id,
-                            time: k.time,
-                            value: k.value,
-                            valueText: k.valueText,
-                            easing: k.easing
-                          })
+                        style={{
+                          position: 'absolute',
+                          left: x,
+                          top: 0,
+                          width: 1,
+                          height: tickHeight,
+                          background: isMajor ? 'var(--text-muted)' : 'var(--border)'
                         }}
                       />
-                    </Tooltip>
+                      {isMajor && (
+                        <span
+                          style={{
+                            position: 'absolute',
+                            left: x + 4,
+                            top: 2,
+                            fontSize: 10,
+                            color: 'var(--text-muted)',
+                            userSelect: 'none'
+                          }}
+                        >
+                          {majorLabel}
+                        </span>
+                      )}
+                    </div>
                   )
-                })}
-              </div>
+                })
+              })()}
+              <div className="playhead" style={{ left: currentTime * pxPerSec }} />
             </div>
-          ))
-        )}
+            {rows.length === 0 ? (
+              <p className="timeline-empty">Add motion in Animate mode — keyframes appear here.</p>
+            ) : (
+              rows.map(({ track }) => (
+                <div
+                  key={track.id}
+                  className="track-lane"
+                  onPointerDown={(e) => onLaneBackgroundPointerDown(e, track, e.currentTarget)}
+                >
+                  {laneMarqueeUi?.trackId === track.id && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 2,
+                        bottom: 2,
+                        left: Math.min(laneMarqueeUi.startX, laneMarqueeUi.endX),
+                        width: Math.abs(laneMarqueeUi.endX - laneMarqueeUi.startX),
+                        background: 'rgba(91,141,239,0.2)',
+                        border: '1px dashed #5b8def',
+                        pointerEvents: 'none',
+                        zIndex: 1
+                      }}
+                    />
+                  )}
+                  <div className="playhead playhead--lane" style={{ left: currentTime * pxPerSec }} />
+                  {track.keyframes.map((k) => {
+                    const keyframeTooltip =
+                      k.valueText !== undefined
+                        ? `${k.time}s — ${k.value} — ${k.valueText.length > 48 ? `${k.valueText.slice(0, 48)}…` : k.valueText}`
+                        : `${k.time}s — ${k.value}`
+                    return (
+                      <Tooltip
+                        key={k.id}
+                        content={keyframeTooltip}
+                        anchorClassName="keyframe-dot-anchor"
+                        anchorStyle={{
+                          position: 'absolute',
+                          left: k.time * pxPerSec,
+                          top: '50%',
+                          transform: 'translate(-50%, -50%)'
+                        }}
+                      >
+                        <div
+                          className={`keyframe-dot${selectedKfSet.has(selectionKey(track.id, k.id)) ? ' keyframe-dot--selected' : ''}`}
+                          onPointerDown={(e) => beginKeyframeDrag(e, track, k)}
+                          onContextMenu={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setKeyframeMenu({
+                              left: e.clientX,
+                              top: e.clientY,
+                              trackId: track.id,
+                              elementId: track.elementId,
+                              property: track.property,
+                              keyframeId: k.id,
+                              time: k.time,
+                              value: k.value,
+                              valueText: k.valueText,
+                              easing: k.easing
+                            })
+                          }}
+                        />
+                      </Tooltip>
+                    )
+                  })}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
       {keyframeMenu && (
         <div

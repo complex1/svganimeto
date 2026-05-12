@@ -2,15 +2,17 @@ import clsx from 'clsx'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faFileArrowUp, faImage } from '@fortawesome/free-solid-svg-icons'
+import { faFileArrowUp, faFloppyDisk, faHouse, faImage } from '@fortawesome/free-solid-svg-icons'
 import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import {
   applyImportedSvg,
   importRasterTraceFile,
   importSvgFile,
-  openRasterVectorizeWizard
+  openRasterVectorizeWizard,
+  saveProjectFile
 } from '@/ipc/fileActions'
+import { returnToHome } from '@/ipc/projectActions'
 
 const modes = [
   { id: 'draw' as const, label: 'Draw' },
@@ -111,6 +113,11 @@ export function TopBar() {
 
   return (
     <header className="top-bar">
+      <Tooltip content="Back to projects">
+        <button type="button" className="top-bar-home" onClick={() => returnToHome()}>
+          <FontAwesomeIcon icon={faHouse} />
+        </button>
+      </Tooltip>
       {editingProjectName ? (
         <input
           ref={projectNameInputRef}
@@ -193,6 +200,23 @@ export function TopBar() {
         </label>
       </Tooltip>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Tooltip
+          content={
+            symbolEditing ? 'Finish symbol editing first' : 'Save project (⌘S / Ctrl+S)'
+          }
+        >
+          <button
+            type="button"
+            disabled={symbolEditing}
+            onClick={() => {
+              if (symbolEditing) return
+              void saveProjectFile()
+            }}
+          >
+            <FontAwesomeIcon icon={faFloppyDisk} style={{ marginRight: 6 }} />
+            Save
+          </button>
+        </Tooltip>
         <input
           ref={fileInputRef}
           type="file"
