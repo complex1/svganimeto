@@ -115,7 +115,7 @@ function createWindow() {
     height: 900,
     minWidth: 960,
     minHeight: 640,
-    title: 'SVG Animation Studio',
+    title: 'svgAnimeto',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
@@ -149,6 +149,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  app.setName('svgAnimeto')
   registerIpcHandlers()
   createMenu()
   createWindow()

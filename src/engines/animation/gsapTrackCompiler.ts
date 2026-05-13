@@ -309,7 +309,7 @@ export function readGsapDriverTransform(
   _timeSec: number
 ): Transform {
   const p = transformProxies.get(elementId)
-  if (!p) return mergeTransformFromTracks(base, elementId, tracks, timeSec)
+  if (!p) return mergeTransformFromTracks(base, elementId, tracks, _timeSec)
   return {
     x: p.x,
     y: p.y,

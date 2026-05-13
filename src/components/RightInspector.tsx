@@ -228,7 +228,10 @@ export function RightInspector() {
   /** Draw / Animate / Preview: editable; Export dialog mode: read-only. */
   const attrsUiLocked = el.locked || mode === 'export'
 
-  const tr = sampleMergedTransformForElement(el, elements, tracks, currentTime, gsapCanvasDriver)
+  const tr =
+    mode === 'draw'
+      ? el.transform
+      : sampleMergedTransformForElement(el, elements, tracks, currentTime, gsapCanvasDriver)
   const fillValue = typeof el.attrs.fill === 'string' ? el.attrs.fill : '#d1d5db'
   const fillNone = fillValue === 'none' || fillValue === 'transparent'
   const fillUrlMatch =

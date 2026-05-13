@@ -111,6 +111,15 @@ function pickVideoMime(): { mime: string; ext: string } {
 
 const MAX_VIDEO_FRAMES = 600
 
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function requestCanvasFrame(stream: MediaStream): void {
+  const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void }
+  track?.requestFrame?.()
+}
+
 /**
  * Records the animation by painting each sampled frame to a canvas stream.
  * Browsers typically emit WebM (VP8/VP9); true H.264 MP4 is uncommon from MediaRecorder.
@@ -128,10 +137,15 @@ export async function exportAnimatedVideoBlob(
 ): Promise<{ blob: Blob; mime: string; ext: string }> {
   const fps = Math.max(1, Math.min(60, options.fps))
   const { w, h } = scaleDimensions(project.width, project.height, Math.max(64, options.maxSide))
-  const baseFrames = Math.max(1, Math.ceil(durationSec * fps))
   const cycles = options.loop ? 2 : 1
-  const totalFrames = Math.min(MAX_VIDEO_FRAMES, baseFrames * cycles)
-  const dt = durationSec / baseFrames
+  const requestedFramesPerCycle = Math.max(1, Math.ceil(durationSec * fps))
+  const framesPerCycle = Math.min(
+    Math.max(1, Math.floor(MAX_VIDEO_FRAMES / cycles)),
+    requestedFramesPerCycle
+  )
+  const totalFrames = framesPerCycle * cycles
+  const dt = durationSec / framesPerCycle
+  const frameDurationMs = Math.max(1, (durationSec * 1000) / framesPerCycle)
 
   const canvas = document.createElement('canvas')
   canvas.width = w
@@ -140,7 +154,13 @@ export async function exportAnimatedVideoBlob(
   if (!ctx) throw new Error('Canvas 2D context is not available')
 
   const { mime, ext } = pickVideoMime()
-  const stream = canvas.captureStream(fps)
+  let stream = canvas.captureStream(0)
+  let manualCapture = Boolean(
+    stream.getVideoTracks()[0] && 'requestFrame' in stream.getVideoTracks()[0]
+  )
+  if (!manualCapture) {
+    stream = canvas.captureStream(fps)
+  }
   let recorder: MediaRecorder
   try {
     recorder = new MediaRecorder(stream, {
@@ -163,16 +183,19 @@ export async function exportAnimatedVideoBlob(
     void (async () => {
       try {
         for (let i = 0; i < totalFrames; i++) {
-          const frameInCycle = i % baseFrames
+          const frameInCycle = i % framesPerCycle
           const t =
-            frameInCycle >= baseFrames - 1
+            frameInCycle >= framesPerCycle - 1
               ? durationSec
               : Math.min(durationSec, frameInCycle * dt)
           await drawSvgFrameToCanvas(ctx, project, tracks, t, w, h)
+          if (manualCapture) {
+            requestCanvasFrame(stream)
+          }
           options.onProgress?.({ current: i + 1, total: totalFrames })
-          await new Promise((r) => requestAnimationFrame(r))
+          await waitMs(manualCapture ? frameDurationMs : Math.max(frameDurationMs, 1000 / fps))
         }
-        await new Promise((r) => setTimeout(r, 150))
+        await waitMs(250)
         recorder.stop()
       } catch (e) {
         try {

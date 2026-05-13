@@ -1,7 +1,7 @@
 {
-  "name": "svg-animation-studio",
+  "name": "svganimeto",
   "version": "0.1.0",
-  "description": "Visual SVG design and animation — MVP 1",
+  "description": "svgAnimeto — visual SVG design and animation",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
@@ -24,6 +24,7 @@
     "polygon-clipping": "^0.15.7",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-router-dom": "^7.15.0",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
@@ -47,8 +48,8 @@
     "vite": "^5.4.11"
   },
   "build": {
-    "appId": "com.svganimation.studio",
-    "productName": "SVG Animation Studio",
+    "appId": "com.svganimeto.app",
+    "productName": "svgAnimeto",
     "directories": {
       "output": "release"
     },

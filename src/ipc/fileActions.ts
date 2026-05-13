@@ -1,7 +1,11 @@
 import { useEditorStore } from '@/store/editorStore'
 import { dialogAlert } from '@/store/dialogStore'
+import { APP_NAME } from '@/constants/brand'
 import { saveActiveProject, openProjectFromDialog, createNewProjectAndOpen } from '@/ipc/projectActions'
+import { getProjectStorage } from '@/services/projectStorage/getProjectStorage'
+import { projectNameFromJson } from '@/services/projectStorage/projectCodec'
 import { useSessionStore } from '@/store/sessionStore'
+import { editorPath, navigateApp } from '@/navigation'
 import { humanizeTraceStatus, traceBitmapWithConfig } from '@/engines/importer/rasterTrace'
 import {
   buildTracerOptionsFromWizard,
@@ -45,10 +49,14 @@ export async function openProjectFile() {
   if (!api?.openProject) return
   const res = await api.openProject()
   if (!res) return
+  const record = await getProjectStorage().write({
+    json: res.content,
+    name: projectNameFromJson(res.content, res.path.split(/[/\\]/).pop() ?? 'Project')
+  })
   useEditorStore.getState().hydrateFromJson(res.content)
   useEditorStore.setState({ projectPath: res.path })
-  useSessionStore.getState().setActiveStorageUri(`file:${res.path}`)
-  useSessionStore.getState().setScreen('editor')
+  useSessionStore.getState().setActiveStorageUri(record.storageUri)
+  navigateApp(editorPath(record.id))
 }
 
 export async function saveProjectFile() {
@@ -211,7 +219,7 @@ export function applyImportedSvg(
   useEditorStore.getState().importSvgFromString(svgText, name, opts)
   if (useEditorStore.getState().project.elements.length === 0) {
     console.warn(
-      '[SVG Animation Studio] Import produced no layers. Common causes: SVG is `<use>` / `<symbol>` only, malformed XML, or wrappers we do not parse yet.'
+      `[${APP_NAME}] Import produced no layers. Common causes: SVG is `<use>` / `<symbol>` only, malformed XML, or wrappers we do not parse yet.`
     )
   }
 }

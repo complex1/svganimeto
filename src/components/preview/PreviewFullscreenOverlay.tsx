@@ -184,6 +184,7 @@ export function PreviewFullscreenOverlay() {
             tracks={tracks}
             currentTime={currentTime}
             gsapCanvasDriver={gsapCanvasDriver}
+            activeTool="select"
             onElementPointerDown={noopPointer}
           />
         </svg>

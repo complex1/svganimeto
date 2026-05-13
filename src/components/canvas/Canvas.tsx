@@ -9,6 +9,11 @@ import { Tooltip } from '@/components/Tooltip'
 import { pathDragLiveDRef } from '@/components/canvas/pathDragLivePreview'
 import { SelectionOverlay } from '@/components/canvas/SelectionOverlay'
 import {
+  applyTransformDragMove,
+  buildTransformDragTargets,
+  clientToSvg
+} from '@/components/canvas/selectionTransformDrag'
+import {
   disposeGsapTrackTimeline,
   rebuildGsapTrackTimeline,
   sampleMergedAttrsForElement,
@@ -139,16 +144,6 @@ function appendBrushStampsAlongStroke(stroke: {
     const { p, tx, ty } = pointAndTangentAtArcLength(smooth, stroke.lastStampArc)
     stroke.stamps.push(makeBrushStamp(p, tx, ty, settings, stroke.rand))
   }
-}
-
-function clientToSvg(svg: SVGSVGElement, clientX: number, clientY: number) {
-  const pt = svg.createSVGPoint()
-  pt.x = clientX
-  pt.y = clientY
-  const ctm = svg.getScreenCTM()
-  if (!ctm) return { x: 0, y: 0 }
-  const p = pt.matrixTransform(ctm.inverse())
-  return { x: p.x, y: p.y }
 }
 
 function localToSvg(svg: SVGSVGElement, target: SVGGraphicsElement, x: number, y: number) {
@@ -1086,6 +1081,56 @@ export function Canvas() {
       }
       if (shiftKey) addToSelection(id)
       else select([id])
+
+      if (
+        button === 0 &&
+        (mode === 'draw' || mode === 'animate') &&
+        activeTool === 'select' &&
+        clicked &&
+        !clicked.locked
+      ) {
+        const svgEl = svgRef.current
+        if (!svgEl) return
+        const stNow = useEditorStore.getState()
+        const dragIds = stNow.selectedIds
+        if (!dragIds.includes(id)) return
+        const dragTargets = buildTransformDragTargets(
+          svgEl,
+          stNow.project.elements,
+          dragIds,
+          stNow.tracks,
+          stNow.currentTime,
+          stNow.mode === 'animate' || stNow.mode === 'preview',
+          stNow.gsapCanvasDriver
+        )
+        if (dragTargets.length === 0) return
+        const startSvg = clientToSvg(svgEl, clientX, clientY)
+        stNow.pushHistory()
+
+        const onMove = (ev: PointerEvent) => {
+          const cur = clientToSvg(svgEl, ev.clientX, ev.clientY)
+          const updates = applyTransformDragMove(
+            dragTargets,
+            { x: 0, y: 0 },
+            startSvg,
+            cur,
+            1,
+            0,
+            'move'
+          )
+          for (const update of updates) {
+            useEditorStore.getState().updateTransform(update.id, update.partial, { skipHistory: true })
+          }
+        }
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove)
+          window.removeEventListener('pointerup', onUp)
+          window.removeEventListener('pointercancel', onUp)
+        }
+        window.addEventListener('pointermove', onMove)
+        window.addEventListener('pointerup', onUp)
+        window.addEventListener('pointercancel', onUp)
+      }
     },
     [
       activeTool,

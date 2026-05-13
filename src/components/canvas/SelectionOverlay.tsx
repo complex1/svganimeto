@@ -2,19 +2,14 @@ import type { CSSProperties } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
-import { flattenForLayers } from '@/engines/document/tree'
+import {
+  applyTransformDragMove,
+  buildTransformDragTargets,
+  clientToSvg,
+  type TransformDragTarget
+} from '@/components/canvas/selectionTransformDrag'
 
 type Box = { left: number; top: number; width: number; height: number }
-
-function clientToSvg(svg: SVGSVGElement, clientX: number, clientY: number) {
-  const pt = svg.createSVGPoint()
-  pt.x = clientX
-  pt.y = clientY
-  const ctm = svg.getScreenCTM()
-  if (!ctm) return { x: 0, y: 0 }
-  const p = pt.matrixTransform(ctm.inverse())
-  return { x: p.x, y: p.y }
-}
 
 function svgToClient(svg: SVGSVGElement, x: number, y: number) {
   const pt = svg.createSVGPoint()
@@ -24,16 +19,6 @@ function svgToClient(svg: SVGSVGElement, x: number, y: number) {
   if (!ctm) return { x: 0, y: 0 }
   const p = pt.matrixTransform(ctm)
   return { x: p.x, y: p.y }
-}
-
-function rotateVector(x: number, y: number, deg: number) {
-  const rad = (deg * Math.PI) / 180
-  const c = Math.cos(rad)
-  const s = Math.sin(rad)
-  return {
-    x: x * c - y * s,
-    y: x * s + y * c
-  }
 }
 
 type Props = {
@@ -46,10 +31,12 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
   const selectedIds = useEditorStore((s) => s.selectedIds)
   const selectedId = selectedIds[0] ?? null
   const selectionKey = selectedIds.length === 1 ? selectedIds[0] : [...selectedIds].sort().join('|')
-  const elements = useEditorStore((s) => s.project.elements)
   const tracks = useEditorStore((s) => s.tracks)
   const currentTime = useEditorStore((s) => s.currentTime)
+  const gsapCanvasDriver = useEditorStore((s) => s.gsapCanvasDriver)
+  const elements = useEditorStore((s) => s.project.elements)
   const mode = useEditorStore((s) => s.mode)
+  const activeTool = useEditorStore((s) => s.activeTool)
   const updateTransform = useEditorStore((s) => s.updateTransform)
   const pushHistory = useEditorStore((s) => s.pushHistory)
 
@@ -62,10 +49,7 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
   const drag = useRef<{
     kind: 'move' | 'scale' | 'rotate'
     startSvg: { x: number; y: number }
-    targets: Array<{
-      id: string
-      startTransform: { x: number; y: number; scaleX: number; scaleY: number; rotation: number }
-    }>
+    targets: TransformDragTarget[]
     pivotSvg: { x: number; y: number }
     startDist: number
     startAngle: number
@@ -154,7 +138,7 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
     return () => window.removeEventListener('pointerdown', onPointerDown)
   }, [pivotMenuOpen])
 
-  if (!selectedId || !box || mode === 'preview' || mode === 'export') return null
+  if (!selectedId || !box || mode === 'preview' || mode === 'export' || activeTool !== 'select') return null
   const svg = svgRef.current
   const wrap = wrapRef.current
   if (!svg || !wrap) return null
@@ -220,25 +204,15 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
       const svgEl = svgRef.current
       const wrap = wrapRef.current
       if (!svgEl || !wrap) return
-      const elementMap = new Map(
-        flattenForLayers(useEditorStore.getState().project.elements).map((n) => [n.el.id, n.el])
+      const transformTargets = buildTransformDragTargets(
+        svgEl,
+        elements,
+        selectedIds,
+        tracks,
+        currentTime,
+        mode === 'animate' || mode === 'preview',
+        gsapCanvasDriver
       )
-      const transformTargets = selectedIds
-        .map((id) => {
-          const elStore = elementMap.get(id)
-          if (!elStore || elStore.locked) return null
-          return {
-            id,
-            startTransform: {
-              x: elStore.transform.x,
-              y: elStore.transform.y,
-              scaleX: elStore.transform.scaleX,
-              scaleY: elStore.transform.scaleY,
-              rotation: elStore.transform.rotation
-            }
-          }
-        })
-        .filter((v): v is { id: string; startTransform: { x: number; y: number; scaleX: number; scaleY: number; rotation: number } } => Boolean(v))
       if (transformTargets.length === 0) return
       const startSvg = clientToSvg(svgEl, e.clientX, e.clientY)
 
@@ -262,73 +236,26 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
         const d = drag.current
         if (!d || !svgRef.current) return
         const cur = clientToSvg(svgRef.current, ev.clientX, ev.clientY)
-        if (d.kind === 'move') {
+        const updates = applyTransformDragMove(
+          d.targets,
+          d.pivotSvg,
+          d.startSvg,
+          cur,
+          d.startDist,
+          d.startAngle,
+          d.kind
+        )
+        for (const update of updates) {
+          updateTransform(update.id, update.partial, { skipHistory: true })
+        }
+        if (d.kind === 'move' && selectionKey && customPivotById.current[selectionKey]) {
           const dx = cur.x - d.startSvg.x
           const dy = cur.y - d.startSvg.y
-          for (const t of d.targets) {
-            updateTransform(
-              t.id,
-              {
-                x: t.startTransform.x + dx,
-                y: t.startTransform.y + dy
-              },
-              { skipHistory: true }
-            )
+          customPivotById.current[selectionKey] = {
+            x: d.pivotSvg.x + dx,
+            y: d.pivotSvg.y + dy
           }
-          // Keep custom pivot attached to the object while translating.
-          if (selectionKey && customPivotById.current[selectionKey]) {
-            customPivotById.current[selectionKey] = {
-              x: d.pivotSvg.x + dx,
-              y: d.pivotSvg.y + dy
-            }
-            setPivotVersion((v) => v + 1)
-          }
-        } else if (d.kind === 'scale') {
-          const dist = Math.hypot(cur.x - d.pivotSvg.x, cur.y - d.pivotSvg.y) || 1
-          const s = dist / d.startDist
-          for (const t of d.targets) {
-            const nextScaleX = Math.max(0.05, t.startTransform.scaleX * s)
-            const nextScaleY = Math.max(0.05, t.startTransform.scaleY * s)
-
-            // Move translate origin so scaling visually happens around pivot.
-            const v0x = t.startTransform.x - d.pivotSvg.x
-            const v0y = t.startTransform.y - d.pivotSvg.y
-            const nextX = d.pivotSvg.x + v0x * s
-            const nextY = d.pivotSvg.y + v0y * s
-
-            updateTransform(
-              t.id,
-              {
-                x: nextX,
-                y: nextY,
-                scaleX: nextScaleX,
-                scaleY: nextScaleY
-              },
-              { skipHistory: true }
-            )
-          }
-        } else if (d.kind === 'rotate') {
-          const ang = (Math.atan2(cur.y - d.pivotSvg.y, cur.x - d.pivotSvg.x) * 180) / Math.PI
-          const delta = ang - d.startAngle
-
-          for (const t of d.targets) {
-            // Move translate origin so rotation visually happens around pivot.
-            const v0x = t.startTransform.x - d.pivotSvg.x
-            const v0y = t.startTransform.y - d.pivotSvg.y
-            const rv = rotateVector(v0x, v0y, delta)
-            const nextX = d.pivotSvg.x + rv.x
-            const nextY = d.pivotSvg.y + rv.y
-
-            updateTransform(
-              t.id,
-              {
-                x: nextX,
-                y: nextY,
-                rotation: t.startTransform.rotation + delta
-              },
-              { skipHistory: true }
-            )
-          }
+          setPivotVersion((v) => v + 1)
         }
       }
 
@@ -438,7 +365,7 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
         onPointerDown={onPointerDown('rotate')}
       />
       {/* Draggable pivot marker used by scale/rotate operations */}
-      <Tooltip content="Pivot (drag to move, double-click to reset)">
+      <Tooltip content="Pivot for resize and rotate only — does not change X/Y. Drag the selection or shape to move.">
       <div
         style={{
           position: 'absolute',

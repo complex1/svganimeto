@@ -1,4 +1,4 @@
-# SVG Animation Studio (MVP 1)
+# svgAnimeto (MVP 1)
 
 Desktop app for importing SVGs, editing transforms, keyframe animation on a timeline, preview playback, and exporting a self-contained animated SVG with CSS `@keyframes`.
 

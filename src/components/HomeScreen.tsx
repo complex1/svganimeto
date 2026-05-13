@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faFileArrowUp, faPlus, faRotateRight } from '@fortawesome/free-solid-svg-icons'
+import { SvgAnimetoLogo } from '@/components/brand/SvgAnimetoLogo'
 import { getProjectStorage } from '@/services/projectStorage/getProjectStorage'
 import type { ProjectRecord } from '@/services/projectStorage/types'
+import { APP_NAME, APP_TAGLINE } from '@/constants/brand'
 import {
   createNewProjectAndOpen,
   importProjectJsonFromFile,
@@ -111,32 +115,49 @@ export function HomeScreen() {
 
   return (
     <div className="home-screen">
-      <div className="home-screen-card">
-        <header className="home-screen-header">
+      <header className="home-screen-topbar">
+        <div className="home-screen-brand">
+          <SvgAnimetoLogo size={40} />
           <div>
-            <h1 className="home-screen-title">SVG Animation Studio</h1>
-            <p className="home-screen-subtitle">
-              Create a project or open one from your local library.
-            </p>
+            <h1 className="home-screen-title">{APP_NAME}</h1>
+            <p className="home-screen-subtitle">{APP_TAGLINE}</p>
           </div>
-          <div className="home-screen-actions">
-            <button
-              type="button"
-              className="primary"
-              disabled={busyId === 'create'}
-              onClick={() => void onCreate()}
-            >
-              New project
-            </button>
-            <button
-              type="button"
-              disabled={busyId === 'open-file'}
-              onClick={() => void onOpenFromDisk()}
-            >
-              {hasDesktopLibrary ? 'Open file…' : 'Import file…'}
-            </button>
-          </div>
-        </header>
+        </div>
+        <button type="button" className="home-screen-refresh" disabled={loading} onClick={() => void refresh()}>
+          <FontAwesomeIcon icon={faRotateRight} style={{ marginRight: 6 }} />
+          Refresh
+        </button>
+      </header>
+
+      <div className="home-screen-body">
+        <section className="home-screen-actions" aria-label="Start a project">
+          <button
+            type="button"
+            className="home-screen-action-card home-screen-action-card--primary"
+            disabled={busyId === 'create'}
+            onClick={() => void onCreate()}
+          >
+            <span className="home-screen-action-icon" aria-hidden>
+              <FontAwesomeIcon icon={faPlus} />
+            </span>
+            <span className="home-screen-action-label">New project</span>
+            <span className="home-screen-action-meta">Start with a blank artboard</span>
+          </button>
+          <button
+            type="button"
+            className="home-screen-action-card"
+            disabled={busyId === 'open-file'}
+            onClick={() => void onOpenFromDisk()}
+          >
+            <span className="home-screen-action-icon" aria-hidden>
+              <FontAwesomeIcon icon={faFileArrowUp} />
+            </span>
+            <span className="home-screen-action-label">
+              {hasDesktopLibrary ? 'Open from computer' : 'Import project file'}
+            </span>
+            <span className="home-screen-action-meta">Browse for a saved .svgmotion file</span>
+          </button>
+        </section>
 
         <input
           ref={fileInputRef}
@@ -148,36 +169,41 @@ export function HomeScreen() {
 
         {error ? <p className="home-screen-error">{error}</p> : null}
 
-        <section className="home-screen-list-section">
-          <div className="home-screen-list-heading">
-            <h2>Projects</h2>
-            <button type="button" disabled={loading} onClick={() => void refresh()}>
-              Refresh
-            </button>
+        <section className="home-screen-recents">
+          <div className="home-screen-recents-heading">
+            <h2>Recent projects</h2>
+            <span className="home-screen-recents-count">
+              {loading ? 'Loading…' : `${projects.length} saved`}
+            </span>
           </div>
 
           {loading ? (
-            <p className="home-screen-muted">Loading projects…</p>
+            <p className="home-screen-muted">Loading your library…</p>
           ) : projects.length === 0 ? (
-            <p className="home-screen-muted">No saved projects yet. Create one to get started.</p>
+            <div className="home-screen-empty">
+              <SvgAnimetoLogo size={56} />
+              <p className="home-screen-empty-title">No projects yet</p>
+              <p className="home-screen-muted">Create a new project or open a file to get started.</p>
+            </div>
           ) : (
-            <ul className="home-screen-list">
+            <ul className="home-screen-grid">
               {projects.map((project) => (
-                <li key={project.storageUri} className="home-screen-list-item">
+                <li key={project.storageUri} className="home-screen-grid-item">
                   <button
                     type="button"
-                    className="home-screen-open"
+                    className="home-screen-project-card"
                     disabled={busyId === project.id}
                     onClick={() => void onOpen(project)}
                   >
-                    <span className="home-screen-open-name">{project.name}</span>
-                    <span className="home-screen-open-meta">
-                      Updated {formatWhen(project.updatedAt)}
+                    <span className="home-screen-project-thumb" aria-hidden>
+                      <SvgAnimetoLogo size={28} />
                     </span>
+                    <span className="home-screen-project-name">{project.name}</span>
+                    <span className="home-screen-project-meta">Updated {formatWhen(project.updatedAt)}</span>
                   </button>
                   <button
                     type="button"
-                    className="home-screen-delete"
+                    className="home-screen-project-delete"
                     disabled={busyId === project.id}
                     onClick={() => void onDelete(project)}
                   >

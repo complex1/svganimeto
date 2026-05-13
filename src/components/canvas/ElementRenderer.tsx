@@ -10,6 +10,7 @@ import { transformToSvgString } from '@/engines/transform/matrix'
 import { cloneSymbolTemplateForInstance } from '@/engines/document/symbolClone'
 import { pathDragLiveDRef } from '@/components/canvas/pathDragLivePreview'
 import type { DrawTool } from '@/store/editorStore'
+import { useEditorStore } from '@/store/editorStore'
 
 type Props = {
   /** Root layers (used for motion-path target lookup). */
@@ -147,11 +148,24 @@ function El({
     button: number
   ) => void
 }) {
+  const mode = useEditorStore((s) => s.mode)
+  const playhead = useEditorStore((s) => s.currentTime)
+  const timelineTracks = useEditorStore((s) => s.tracks)
+  const gsapDriver = useEditorStore((s) => s.gsapCanvasDriver)
   if (el.visible === false) return null
-  const tr0 = sampleMergedTransformForElement(el, rootElements, tracks, currentTime, gsapCanvasDriver)
-  const tr = applyMotionPathToTransform(tr0, el.attrs, rootElements, tracks, el.id, currentTime)
+  const animateView = mode === 'animate' || mode === 'preview'
+  const timeSec = animateView ? playhead : currentTime
+  const tracksForSample = animateView ? timelineTracks : tracks
+  const tr0 = animateView
+    ? sampleMergedTransformForElement(el, rootElements, tracksForSample, timeSec, gsapDriver)
+    : el.transform
+  const tr = applyMotionPathToTransform(tr0, el.attrs, rootElements, tracksForSample, el.id, timeSec)
   const editorTransform = transformToSvgString(tr)
-  const mergedAttrs = sampleMergedAttrsForElement(el, tracks, currentTime, gsapCanvasDriver) as VectorElement['attrs']
+  const mergedAttrs = (
+    animateView
+      ? sampleMergedAttrsForElement(el, tracksForSample, timeSec, gsapDriver)
+      : el.attrs
+  ) as VectorElement['attrs']
   const cssFilter = combinedFilterStyle(mergedAttrs as Record<string, unknown>)
   const live = pathDragLiveDRef.current
   const mergedForShape =
@@ -231,9 +245,9 @@ function El({
               el={c}
               symbols={symbols}
               tracks={tracks}
-              currentTime={currentTime}
-              gsapCanvasDriver={gsapCanvasDriver}
-              rootElements={rootElements}
+          currentTime={currentTime}
+          gsapCanvasDriver={gsapCanvasDriver}
+          rootElements={rootElements}
               activeTool={activeTool}
               onElementPointerDown={onElementPointerDown}
             />

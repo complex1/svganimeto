@@ -3,6 +3,7 @@ import type { ChangeEvent, KeyboardEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faFileArrowUp, faFloppyDisk, faHouse, faImage } from '@fortawesome/free-solid-svg-icons'
+import { SvgAnimetoLogo } from '@/components/brand/SvgAnimetoLogo'
 import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import {
@@ -118,6 +119,7 @@ export function TopBar() {
           <FontAwesomeIcon icon={faHouse} />
         </button>
       </Tooltip>
+      <SvgAnimetoLogo size={22} className="top-bar-logo" />
       {editingProjectName ? (
         <input
           ref={projectNameInputRef}
