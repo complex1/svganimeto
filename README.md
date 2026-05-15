@@ -2,6 +2,8 @@
 
 **svgAnimeto** is a desktop-first visual editor for SVG design and timeline-based animation. You can import or draw vector artwork, animate properties with keyframes, preview playback, and export animated SVG (CSS `@keyframes`), HTML, GIF, or video.
 
+**Live demo (web build):** [svganimeto-lq3j.vercel.app](https://svganimeto-lq3j.vercel.app/)
+
 ## Features at a glance
 
 - **Vector editing**: shapes, pen, pencil, path editing, brush, fill, eraser, text, shape builder (boolean-style operations on paths).
