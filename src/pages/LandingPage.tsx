@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import gsap from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
@@ -74,11 +74,11 @@ export function LandingPage() {
   const rootRef = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
+    gsap.registerPlugin(ScrollTrigger)
     const root = rootRef.current
     if (!root) return
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
 
-    gsap.registerPlugin(ScrollTrigger)
     const ctx = gsap.context(() => {
       gsap.from('.landing-hero-badge', { y: 18, opacity: 0, duration: 0.45, ease: 'power2.out' })
       gsap.from('.landing-hero-word', {
@@ -140,11 +140,24 @@ export function LandingPage() {
     return () => ctx.revert()
   }, [])
 
+  useEffect(() => {
+    gsap.registerPlugin(ScrollTrigger)
+    const onResize = () => {
+      ScrollTrigger.refresh()
+    }
+    window.addEventListener('resize', onResize)
+    window.addEventListener('orientationchange', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('orientationchange', onResize)
+    }
+  }, [])
+
   return (
     <div className="landing" ref={rootRef}>
       <nav className="landing-nav" aria-label="Primary">
         <a href="#top" className="landing-nav-brand">
-          <SvgAnimetoLogo size={36} />
+          <SvgAnimetoLogo size={36} className="landing-nav-logo" />
           <span>{APP_NAME}</span>
         </a>
         <div className="landing-nav-links">
@@ -247,7 +260,11 @@ export function LandingPage() {
           SVGator excel in their lanes; svgAnimeto is for authors who want a <strong>desktop-grade SVG editor</strong>{' '}
           with <strong>timeline animation</strong> and <strong>code-first export</strong> under an OSS license.
         </p>
-        <div className="landing-compare-wrap">
+        <div
+          className="landing-compare-wrap"
+          role="region"
+          aria-label="Comparison table — scroll horizontally on small screens"
+        >
           <table className="landing-compare">
             <thead>
               <tr>
@@ -276,7 +293,7 @@ export function LandingPage() {
           <strong>github.com/complex1/svganimeto</strong>. The app uses React, Vite, Zustand, and GSAP—familiar pieces if
           you are extending the timeline or storage adapters.
         </p>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'center' }}>
+        <div className="landing-cta-actions">
           <a className="landing-btn landing-btn--primary" href={GITHUB_REPO_URL} target="_blank" rel="noreferrer noopener">
             Open repository
           </a>
