@@ -1,40 +1,66 @@
-# svgAnimeto (MVP 1)
+# svgAnimeto
 
-Desktop app for importing SVGs, editing transforms, keyframe animation on a timeline, preview playback, and exporting a self-contained animated SVG with CSS `@keyframes`.
+**svgAnimeto** is a desktop-first visual editor for SVG design and timeline-based animation. You can import or draw vector artwork, animate properties with keyframes, preview playback, and export animated SVG (CSS `@keyframes`), HTML, GIF, or video.
 
-## Stack
+## Features at a glance
 
-- **React 18** + **TypeScript** + **Vite** (renderer)
-- **Electron** + **electron-vite** (main + preload)
-- **Zustand** (`editorStore` — document, selection, timeline, animation tracks, UI, undo/redo)
+- **Vector editing**: shapes, pen, pencil, path editing, brush, fill, eraser, text, shape builder (boolean-style operations on paths).
+- **Animation**: per-property tracks (`x`, `y`, rotation, opacity, colors, path `d`, motion path, effects, and more), scrubbable timeline, optional auto-keyframing at the playhead.
+- **Preview**: fullscreen preview driven by the same timeline engine.
+- **Export**: animated SVG, standalone HTML, GIF, or raster video (see [User guide — Export](docs/user-guide.md#export)).
+- **Projects**: library on the home screen; `.svgmotion` JSON for save/open (Electron) or IndexedDB in the browser build.
+- **Import**: SVG files; raster images with optional trace wizard or manual reference tracing.
 
-## Scripts
+## Requirements
+
+- **Node.js** 18+ (LTS recommended)
+- **npm** (ships with Node)
+
+## Install and run
 
 ```bash
 npm install
-npm run dev          # Electron + Vite dev (HMR for renderer)
-npm run build        # Compile main, preload, renderer → out/
-npm run dist         # Build + electron-builder (mac dmg, win nsis, linux AppImage)
-npm run lint
-npm run format       # Prettier
+npm run dev
 ```
 
-## Usage
+This starts **electron-vite** in development mode: the Electron shell loads the Vite renderer with hot module replacement.
 
-- **Import SVG**: top bar **Import SVG…** (Electron uses native dialog; browser/dev uses a file picker). **File → Import SVG** / **⌘/Ctrl+I** also works in the desktop app.
-- **Draw / Animate / Preview / Export**: top bar modes. Bottom panel shows **Layers** in Draw mode; **Layers + Timeline** in Animate/Preview.
-- **Animate** + **Auto keyframe**: moving/scaling/rotating a selection or editing the inspector writes keyframes at the playhead.
-- **Timeline**: drag the ruler to scrub; **Alt+click** a keyframe dot to delete; drag a dot to move in time.
-- **Export**: animated SVG + embedded `<style>` (CSS keyframes). **Save to file** uses the system dialog when running in Electron.
+| Script | Purpose |
+|--------|---------|
+| `npm run dev` | Development: Electron + Vite HMR |
+| `npm run build` | Compile main, preload, and renderer into `out/` |
+| `npm run preview` | Preview production build locally |
+| `npm run dist` | Production build + **electron-builder** (macOS DMG, Windows NSIS, Linux AppImage) |
+| `npm run lint` | ESLint |
+| `npm run format` | Prettier on `src/**/*.{ts,tsx,css}` and `electron/**/*.ts` |
+| `npm run pack` | electron-builder `--dir` (unpackaged output for testing) |
 
-## Project file
+Output installers land under `release/` when using `dist`.
 
-Save/load **`.svgmotion`** JSON via **File → Save** / **Open** (or **⌘S** / **⌘O**). Format includes `elements`, `animations` (tracks), duration, and `currentTime`.
+## Documentation
 
-## Security
+| Document | Audience | Contents |
+|----------|----------|----------|
+| [docs/README.md](docs/README.md) | Everyone | Documentation index and quick links |
+| [docs/user-guide.md](docs/user-guide.md) | Users | Modes, tools, panels, shortcuts, import/export, project workflow |
+| [docs/architecture-and-modules.md](docs/architecture-and-modules.md) | Developers | Repository layout, Electron IPC, stores, engines, types, workers |
 
-Preload exposes a minimal `contextBridge` API (`openProject`, `saveProject`, `importSvg`, `exportSvg`, `onMenuAction`). Main process uses `contextIsolation` and `sandbox` for the `BrowserWindow`.
+## Tech stack
 
-## Roadmap
+- **React 18**, **TypeScript**, **Vite** (renderer)
+- **Electron** + **electron-vite** (main process + preload)
+- **Zustand** for editor and session state
+- **GSAP** for optional dev compilation paths and playback-related logic
+- **polygon-clipping**, custom geometry helpers for booleans, eraser, and fills
 
-See [REQUREMENT.md](REQUREMENT.md) for drawing tools, presets, motion path, stroke draw, React/Vue export, and interactive state machines.
+## Security (Electron)
+
+The preload script exposes a minimal `contextBridge` API (`window.api`) for file dialogs, project library, export save, and menu-driven import events. The main window uses **context isolation** and **sandbox** where applicable. See [Architecture — Electron](docs/architecture-and-modules.md#electron-main-preload-and-ipc).
+
+## Roadmap and requirements
+
+Product direction and future ideas are tracked in [REQUREMENT.md](REQUREMENT.md).
+
+## License
+
+See the repository’s license file if present; otherwise treat usage terms as defined by the project owner.
