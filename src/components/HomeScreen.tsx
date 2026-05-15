@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faFileArrowUp, faPlus, faRotateRight } from '@fortawesome/free-solid-svg-icons'
+import { Link } from 'react-router-dom'
 import { SvgAnimetoLogo } from '@/components/brand/SvgAnimetoLogo'
 import { getProjectStorage } from '@/services/projectStorage/getProjectStorage'
 import type { ProjectRecord } from '@/services/projectStorage/types'
 import { APP_NAME, APP_TAGLINE } from '@/constants/brand'
+import { routes } from '@/navigation'
 import {
   createNewProjectAndOpen,
   importProjectJsonFromFile,
@@ -123,10 +125,15 @@ export function HomeScreen() {
             <p className="home-screen-subtitle">{APP_TAGLINE}</p>
           </div>
         </div>
-        <button type="button" className="home-screen-refresh" disabled={loading} onClick={() => void refresh()}>
-          <FontAwesomeIcon icon={faRotateRight} style={{ marginRight: 6 }} />
-          Refresh
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Link to={routes.landing} className="home-screen-site-link">
+            About & compare
+          </Link>
+          <button type="button" className="home-screen-refresh" disabled={loading} onClick={() => void refresh()}>
+            <FontAwesomeIcon icon={faRotateRight} style={{ marginRight: 6 }} />
+            Refresh
+          </button>
+        </div>
       </header>
 
       <div className="home-screen-body">

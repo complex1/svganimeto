@@ -27,7 +27,7 @@ import {
   saveProjectFile
 } from '@/ipc/fileActions'
 import { loadProjectForEditor } from '@/ipc/projectActions'
-import { routes } from '@/navigation'
+import { routesHome } from '@/navigation'
 
 export function EditorPage() {
   const { projectId } = useParams()
@@ -46,7 +46,7 @@ export function EditorPage() {
 
   useEffect(() => {
     if (!projectId) {
-      navigate(routes.home, { replace: true })
+      navigate(routesHome, { replace: true })
       return
     }
 
@@ -56,7 +56,7 @@ export function EditorPage() {
       const loaded = await loadProjectForEditor(projectId)
       if (cancelled) return
       if (!loaded) {
-        navigate(routes.home, { replace: true })
+        navigate(routesHome, { replace: true })
         return
       }
       setLoadState('ready')

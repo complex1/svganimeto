@@ -796,6 +796,22 @@ body.is-resizing * {
   line-height: 1.45;
 }
 
+.home-screen-site-link {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+}
+
+.home-screen-site-link:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--bg-elevated);
+}
+
 .home-screen-refresh {
   flex-shrink: 0;
 }

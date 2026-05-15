@@ -5,7 +5,7 @@ import type { ProjectRecord } from '@/services/projectStorage/types'
 import { useEditorStore } from '@/store/editorStore'
 import { useSessionStore } from '@/store/sessionStore'
 import { dialogAlert } from '@/store/dialogStore'
-import { editorPath, navigateApp, routes } from '@/navigation'
+import { editorPath, navigateApp, routesHome } from '@/navigation'
 
 function guardSymbolEditing(): boolean {
   if (useEditorStore.getState().symbolEditBackup) {
@@ -91,5 +91,5 @@ export async function saveActiveProject() {
 export function returnToHome() {
   if (guardSymbolEditing()) return
   useSessionStore.getState().setActiveStorageUri(null)
-  navigateApp(routes.home)
+  navigateApp(routesHome)
 }
