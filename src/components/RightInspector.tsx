@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { nanoid } from 'nanoid'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faChevronDown, faChevronRight, faCircleInfo } from '@fortawesome/free-solid-svg-icons'
+import { faChevronDown, faChevronRight, faCircleInfo, faWandMagicSparkles } from '@fortawesome/free-solid-svg-icons'
 import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import { flattenForLayers } from '@/engines/document/tree'
@@ -15,6 +15,7 @@ import type { AnimationTrack } from '@/types/animation'
 import type { VectorElement } from '@/types/document'
 import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
 import type { LinearGradientDef, RadialGradientDef } from '@/types/gradient'
+import { AnimationPresetsModal } from '@/components/AnimationPresetsModal'
 
 function InspectorHelpIcon({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -153,6 +154,7 @@ export function RightInspector() {
 
   const [morphTargetPathId, setMorphTargetPathId] = useState('')
   const [openSections, setOpenSections] = useState(defaultOpenSections)
+  const [presetsOpen, setPresetsOpen] = useState(false)
   const toggleSection = (sectionId: InspectorSectionId) => {
     setOpenSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }))
   }
@@ -549,6 +551,23 @@ export function RightInspector() {
               </>
             }
           >
+            <button
+              type="button"
+              className="primary"
+              disabled={attrsUiLocked}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                width: '100%',
+                marginBottom: 10
+              }}
+              onClick={() => setPresetsOpen(true)}
+            >
+              <FontAwesomeIcon icon={faWandMagicSparkles} />
+              Browse animation presets…
+            </button>
             <div className="inspector-subsection-title">Motion path</div>
             <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <span style={{ color: 'var(--text-muted)' }}>Guide path</span>
@@ -1602,6 +1621,7 @@ export function RightInspector() {
           </div>
         </InspectorCollapsibleSection>
       </div>
+      <AnimationPresetsModal open={presetsOpen} onClose={() => setPresetsOpen(false)} />
     </aside>
   )
 }

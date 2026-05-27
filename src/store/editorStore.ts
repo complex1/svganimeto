@@ -295,6 +295,70 @@ type EditorState = {
   hydrateFromJson: (json: string) => void
 }
 
+/**
+ * Walk the element tree and, for every layer that has any animation track, fold
+ * the t=0 sample into the layer's base `transform` / `attrs`. Tracks are left
+ * untouched, so playback in Animate/Preview still looks identical. The only
+ * observable effect: Draw view (which always renders `el.transform` / `el.attrs`)
+ * now shows the animation's starting frame instead of whatever state the user
+ * happened to scrub to.
+ */
+function bakeTracksAtZero(roots: VectorElement[], tracks: AnimationTrack[]): VectorElement[] {
+  if (tracks.length === 0) return roots
+  /** Group tracks by element so each per-layer lookup is O(1). */
+  const tracksByEl = new Map<string, AnimationTrack[]>()
+  for (const t of tracks) {
+    if (t.keyframes.length === 0) continue
+    const list = tracksByEl.get(t.elementId) ?? []
+    list.push(t)
+    tracksByEl.set(t.elementId, list)
+  }
+  if (tracksByEl.size === 0) return roots
+  let mutated = false
+  const walk = (els: VectorElement[]): VectorElement[] => {
+    let listChanged = false
+    const next = els.map((el) => {
+      const ts = tracksByEl.get(el.id)
+      let curr = el
+      if (ts && ts.length > 0) {
+        const bakedTransform = mergeTransformFromTracks(el.transform, el.id, ts, 0)
+        const bakedAttrs = mergeAttrsFromTracks(el.attrs, el.id, ts, 0)
+        const transformChanged = (Object.keys(bakedTransform) as (keyof Transform)[]).some(
+          (k) => bakedTransform[k] !== el.transform[k]
+        )
+        /** mergeAttrsFromTracks returns a new object — compare by value to avoid spurious clones. */
+        let attrsChanged = false
+        for (const k of Object.keys(bakedAttrs)) {
+          if (bakedAttrs[k] !== el.attrs[k]) {
+            attrsChanged = true
+            break
+          }
+        }
+        if (transformChanged || attrsChanged) {
+          curr = {
+            ...el,
+            transform: transformChanged ? bakedTransform : el.transform,
+            attrs: attrsChanged ? bakedAttrs : el.attrs
+          }
+          mutated = true
+        }
+      }
+      if (curr.children && curr.children.length > 0) {
+        const nextKids = walk(curr.children)
+        if (nextKids !== curr.children) {
+          curr = { ...curr, children: nextKids }
+          mutated = true
+        }
+      }
+      if (curr !== el) listChanged = true
+      return curr
+    })
+    return listChanged ? next : els
+  }
+  const result = walk(roots)
+  return mutated ? result : roots
+}
+
 function captureHistory(state: EditorState): HistorySnapshot {
   return {
     elements: structuredClone(state.project.elements),
@@ -622,6 +686,17 @@ export const useEditorStore = create<EditorState>((set, get) => {
          * new mode.
          */
         const modeChanged = m !== s.mode
+        /**
+         * When entering Draw mode, bake the t=0 sample of every animated property into
+         * the layer's base `transform` / `attrs`. Draw view renders the resting pose
+         * (`el.transform`), so without this step the user keeps seeing whatever frame
+         * they scrubbed to in Animate. After baking, the resting pose IS the t=0 frame,
+         * which is what users expect when they switch tabs.
+         */
+        const nextElements =
+          modeChanged && m === 'draw' && s.tracks.length > 0
+            ? bakeTracksAtZero(s.project.elements, s.tracks)
+            : s.project.elements
         return {
           mode: m,
           activeTool: nextTool,
@@ -632,6 +707,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
                 selectedIds: [],
                 selectedKeyframes: []
               }
+            : {}),
+          ...(nextElements !== s.project.elements
+            ? { project: { ...s.project, elements: nextElements } }
             : {})
         }
       }),
