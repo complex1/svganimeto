@@ -15,10 +15,25 @@ import { cloneSymbolTemplateForInstance } from '@/engines/document/symbolClone'
 function allElements(roots: VectorElement[]): VectorElement[] {
   const out: VectorElement[] = []
   const walk = (el: VectorElement) => {
+    if (el.visible === false) return
     out.push(el)
     el.children?.forEach(walk)
   }
   roots.forEach(walk)
+  return out
+}
+
+/** Strip any `visible === false` branch from the layer tree so exports never include hidden art. */
+function filterVisibleTree(roots: VectorElement[]): VectorElement[] {
+  const out: VectorElement[] = []
+  for (const el of roots) {
+    if (el.visible === false) continue
+    if (el.children && el.children.length > 0) {
+      out.push({ ...el, children: filterVisibleTree(el.children) })
+    } else {
+      out.push(el)
+    }
+  }
   return out
 }
 
@@ -288,7 +303,8 @@ export function exportStillFrameSvg(project: Project, tracks: AnimationTrack[], 
 
   const { width, height } = project
   const defs = renderGradientDefs(project)
-  const body = project.elements.map((el) => renderElementAtTime(el)).join('\n')
+  const visibleRoots = filterVisibleTree(project.elements)
+  const body = visibleRoots.map((el) => renderElementAtTime(el)).join('\n')
   const bg = `<rect x="0" y="0" width="${width}" height="${height}" fill="#f4f5f7" stroke="#d0d4dc" />`
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" shape-rendering="geometricPrecision">\n${defs}${bg}\n${body}\n</svg>`
@@ -302,8 +318,9 @@ export function exportAnimatedSvg(
 ): string {
   const { width, height } = project
   const defs = renderGradientDefs(project)
-  const body = project.elements.map((el) => renderElement(el, project, tracks, 0)).join('\n')
-  const css = buildKeyframesCss(project.elements, tracks, durationSec, options?.loop ?? false)
+  const visibleRoots = filterVisibleTree(project.elements)
+  const body = visibleRoots.map((el) => renderElement(el, project, tracks, 0)).join('\n')
+  const css = buildKeyframesCss(visibleRoots, tracks, durationSec, options?.loop ?? false)
 
   let svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">\n${defs}<style>\n${css}\n</style>\n${body}\n</svg>`
 

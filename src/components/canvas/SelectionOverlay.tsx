@@ -1,6 +1,5 @@
 import type { CSSProperties } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import {
   applyTransformDragMove,
@@ -204,13 +203,14 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
       const svgEl = svgRef.current
       const wrap = wrapRef.current
       if (!svgEl || !wrap) return
+      const inAnim = mode === 'animate'
       const transformTargets = buildTransformDragTargets(
         svgEl,
         elements,
         selectedIds,
         tracks,
-        currentTime,
-        mode === 'animate' || mode === 'preview',
+        inAnim ? currentTime : 0,
+        inAnim,
         gsapCanvasDriver
       )
       if (transformTargets.length === 0) return
@@ -365,8 +365,8 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
         onPointerDown={onPointerDown('rotate')}
       />
       {/* Draggable pivot marker used by scale/rotate operations */}
-      <Tooltip content="Pivot for resize and rotate only — does not change X/Y. Drag the selection or shape to move.">
       <div
+        title="Drag to move pivot · right-click for presets · double-click to reset"
         style={{
           position: 'absolute',
           left: pivotScreen.left - 5,
@@ -400,7 +400,6 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
           setPivotVersion((v) => v + 1)
         }}
       />
-      </Tooltip>
       {pivotMenuOpen && pivotMenuPos && (
         <div
           ref={pivotMenuRef}

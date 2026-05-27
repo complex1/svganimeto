@@ -2,17 +2,17 @@ import type { Transform, VectorElement } from '@/types/document'
 import type { AnimationTrack } from '@/types/animation'
 import { sampleMergedTransformForElement } from '@/engines/animation/gsapTrackCompiler'
 import { flattenForLayers } from '@/engines/document/tree'
-import {
-  affineAroundPivot,
-  composeSvgTransformMatrix,
-  decomposeSvgTransformMatrix,
-  parentWorldMatrix
-} from '@/engines/geometry/svgWorldTransform'
+import { parentWorldMatrix } from '@/engines/geometry/svgWorldTransform'
 
+/**
+ * One drag target. We rotate / scale around a pivot expressed in the SVG root user
+ * space, but the element's `x`/`y` live in the parent's *local* coordinate system,
+ * so we precompute `parentWorldInv` to convert pivot -> parent-local once.
+ */
 export type TransformDragTarget = {
   id: string
   startTransform: Pick<Transform, 'x' | 'y' | 'scaleX' | 'scaleY' | 'rotation' | 'skewX' | 'skewY'>
-  worldStart: DOMMatrix
+  /** Inverse of the parent's world matrix; used to convert a world-space pivot into parent-local. */
   parentWorldInv: DOMMatrix
 }
 
@@ -26,12 +26,6 @@ export function clientToSvg(svg: SVGSVGElement, clientX: number, clientY: number
   return { x: p.x, y: p.y }
 }
 
-export function elementWorldMatrix(dom: SVGGraphicsElement, transform: Transform): DOMMatrix {
-  const fromDom = dom.getCTM()
-  if (fromDom) return DOMMatrix.fromMatrix(fromDom)
-  return parentWorldMatrix(dom).multiply(composeSvgTransformMatrix(transform))
-}
-
 export function inverseParentWorldMatrix(dom: SVGGraphicsElement): DOMMatrix {
   try {
     return parentWorldMatrix(dom).inverse()
@@ -40,8 +34,17 @@ export function inverseParentWorldMatrix(dom: SVGGraphicsElement): DOMMatrix {
   }
 }
 
-function approxZero(n: number) {
-  return Math.abs(n) < 1e-6
+function transformPoint(m: DOMMatrix, x: number, y: number) {
+  const px = m.a * x + m.c * y + m.e
+  const py = m.b * x + m.d * y + m.f
+  return { x: px, y: py }
+}
+
+function rotate2d(x: number, y: number, deg: number) {
+  const r = (deg * Math.PI) / 180
+  const c = Math.cos(r)
+  const s = Math.sin(r)
+  return { x: x * c - y * s, y: x * s + y * c }
 }
 
 function dragStartTransform(
@@ -90,26 +93,22 @@ export function buildTransformDragTargets(
       mergeAnimationTracks,
       gsapCanvasDriver
     )
-    if (!dom) {
-      targets.push({
-        id,
-        startTransform,
-        worldStart: composeSvgTransformMatrix(startTransform as Transform),
-        parentWorldInv: new DOMMatrix()
-      })
-      continue
-    }
     targets.push({
       id,
       startTransform,
-      worldStart: elementWorldMatrix(dom, startTransform as Transform),
-      parentWorldInv: inverseParentWorldMatrix(dom)
+      parentWorldInv: dom ? inverseParentWorldMatrix(dom) : new DOMMatrix()
     })
   }
 
   return targets
 }
 
+/**
+ * Compute partial transform updates for an in-progress drag.
+ *
+ * All math runs directly on (x, y, scaleX, scaleY, rotation) — no decomposition of a world
+ * matrix — so we can't lose precision and rotation is guaranteed to happen *around* the pivot.
+ */
 export function applyTransformDragMove(
   targets: TransformDragTarget[],
   pivotSvg: { x: number; y: number },
@@ -141,30 +140,17 @@ export function applyTransformDragMove(
     const s = dist / startDist
     for (const target of targets) {
       const st = target.startTransform
-      if (approxZero(st.rotation) && approxZero(st.skewX) && approxZero(st.skewY)) {
-        const v0x = st.x - pivotSvg.x
-        const v0y = st.y - pivotSvg.y
-        updates.push({
-          id: target.id,
-          partial: {
-            x: pivotSvg.x + v0x * s,
-            y: pivotSvg.y + v0y * s,
-            scaleX: Math.max(0.05, st.scaleX * s),
-            scaleY: Math.max(0.05, st.scaleY * s)
-          }
-        })
-        continue
-      }
-      const scaleOp = new DOMMatrix().scaleSelf(s, s)
-      const worldNew = affineAroundPivot(target.worldStart, pivotSvg, scaleOp)
-      const localNew = target.parentWorldInv.multiply(worldNew)
-      const next = decomposeSvgTransformMatrix(localNew)
+      // Pivot in parent-local coords (where x/y live).
+      const pivotLocal = transformPoint(target.parentWorldInv, pivotSvg.x, pivotSvg.y)
+      const vx = st.x - pivotLocal.x
+      const vy = st.y - pivotLocal.y
       updates.push({
         id: target.id,
         partial: {
-          ...next,
-          skewX: st.skewX,
-          skewY: st.skewY
+          x: pivotLocal.x + vx * s,
+          y: pivotLocal.y + vy * s,
+          scaleX: Math.max(0.05, st.scaleX * s),
+          scaleY: Math.max(0.05, st.scaleY * s)
         }
       })
     }
@@ -173,17 +159,18 @@ export function applyTransformDragMove(
 
   const ang = (Math.atan2(curSvg.y - pivotSvg.y, curSvg.x - pivotSvg.x) * 180) / Math.PI
   const delta = ang - startAngle
-  const rotateOp = new DOMMatrix().rotateSelf(delta)
   for (const target of targets) {
-    const worldNew = affineAroundPivot(target.worldStart, pivotSvg, rotateOp)
-    const localNew = target.parentWorldInv.multiply(worldNew)
-    const next = decomposeSvgTransformMatrix(localNew)
+    const st = target.startTransform
+    const pivotLocal = transformPoint(target.parentWorldInv, pivotSvg.x, pivotSvg.y)
+    const vx = st.x - pivotLocal.x
+    const vy = st.y - pivotLocal.y
+    const r = rotate2d(vx, vy, delta)
     updates.push({
       id: target.id,
       partial: {
-        ...next,
-        skewX: target.startTransform.skewX,
-        skewY: target.startTransform.skewY
+        x: pivotLocal.x + r.x,
+        y: pivotLocal.y + r.y,
+        rotation: st.rotation + delta
       }
     })
   }

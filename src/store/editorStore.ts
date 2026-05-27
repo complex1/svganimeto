@@ -717,30 +717,37 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     updateTransform: (id, partial, opts) => {
       const s0 = get()
-      const newEls = updateElementById(s0.project.elements, id, (el) => ({
-        ...el,
-        transform: { ...el.transform, ...partial }
-      }))
-      let newTracks = s0.tracks
+      const inAnimateLikeMode = s0.mode === 'animate' || s0.mode === 'preview'
       const props = Object.keys(partial) as (keyof Transform)[]
-      if (
-        (s0.mode === 'animate' || s0.mode === 'preview') &&
-        !s0.isPlaying
-      ) {
-        const fresh = flattenForLayers(newEls).find((x) => x.el.id === id)?.el
+      /**
+       * In Animate / Preview, only the keyframe at the playhead changes — the layer's
+       * BASE transform (`el.transform`) must stay untouched so that Draw view always
+       * reflects the t=0 (or unanimated) state of every property. Otherwise scrubbing
+       * in Animate silently rewrites the base and Draw view shows "random" frames.
+       */
+      const newEls = inAnimateLikeMode
+        ? s0.project.elements
+        : updateElementById(s0.project.elements, id, (el) => ({
+            ...el,
+            transform: { ...el.transform, ...partial }
+          }))
+      let newTracks = s0.tracks
+      if (inAnimateLikeMode && !s0.isPlaying) {
+        const fresh = flattenForLayers(s0.project.elements).find((x) => x.el.id === id)?.el
         if (fresh && !fresh.locked) {
           for (const key of props) {
-            const prop = key as AnimatableProperty
             if (
-              !['x', 'y', 'scaleX', 'scaleY', 'rotation', 'opacity', 'skewX', 'skewY'].includes(prop)
+              !['x', 'y', 'scaleX', 'scaleY', 'rotation', 'opacity', 'skewX', 'skewY'].includes(key)
             )
               continue
+            const nextVal = (partial as Partial<Transform>)[key]
+            if (typeof nextVal !== 'number') continue
             newTracks = upsertKeyframeInTracks(
               newTracks,
               id,
-              prop,
+              key as AnimatableProperty,
               s0.currentTime,
-              fresh.transform[prop],
+              nextVal,
               undefined
             )
           }

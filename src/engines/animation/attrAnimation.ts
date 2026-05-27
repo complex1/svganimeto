@@ -46,6 +46,38 @@ export function packedRgbToHex(packed: number): string {
   return `#${x(r)}${x(g)}${x(b)}`
 }
 
+/** sRGB component (0..255) -> linear-light (0..1). */
+function srgbToLinear(c: number): number {
+  const x = c / 255
+  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4)
+}
+
+/** Linear-light (0..1) -> sRGB component (0..255). */
+function linearToSrgb(x: number): number {
+  const c = x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(Math.max(0, x), 1 / 2.4) - 0.055
+  return Math.max(0, Math.min(255, Math.round(c * 255)))
+}
+
+/**
+ * Lerp two packed sRGB colors in linear-light space.
+ *
+ * Naive sRGB interpolation (the previous behaviour) muddies mid-tones — e.g. blue→yellow
+ * passes through grey-brown. Linearizing first keeps gradients perceptually faithful and
+ * fixes the "weird" mid-animation tones the user reported.
+ */
+function lerpPackedRgbLinear(a: number, b: number, t: number): number {
+  const ar = srgbToLinear((a >> 16) & 255)
+  const ag = srgbToLinear((a >> 8) & 255)
+  const ab = srgbToLinear(a & 255)
+  const br = srgbToLinear((b >> 16) & 255)
+  const bg = srgbToLinear((b >> 8) & 255)
+  const bb = srgbToLinear(b & 255)
+  const r = linearToSrgb(ar + (br - ar) * t)
+  const g = linearToSrgb(ag + (bg - ag) * t)
+  const bl = linearToSrgb(ab + (bb - ab) * t)
+  return ((r & 255) << 16) | ((g & 255) << 8) | (bl & 255)
+}
+
 function samplePackedColorTrack(track: AnimationTrack, time: number): number | undefined {
   const kfs = sortKeyframes(track.keyframes)
   if (kfs.length === 0) return undefined
@@ -66,16 +98,7 @@ function samplePackedColorTrack(track: AnimationTrack, time: number): number | u
   if (span <= 0) return b.value
   const raw = (time - a.time) / span
   const eased = applyEasing(raw, b.easing ?? a.easing ?? 'linear')
-  const ar = (a.value >> 16) & 255
-  const ag = (a.value >> 8) & 255
-  const ab = a.value & 255
-  const br = (b.value >> 16) & 255
-  const bg = (b.value >> 8) & 255
-  const bb = b.value & 255
-  const r = Math.round(ar + (br - ar) * eased)
-  const g = Math.round(ag + (bg - ag) * eased)
-  const bl = Math.round(ab + (bb - ab) * eased)
-  return ((r & 255) << 16) | ((g & 255) << 8) | (bl & 255)
+  return lerpPackedRgbLinear(a.value, b.value, eased)
 }
 
 /** Path `d`: between keyframes, approximate morph; outside, hold last key. */

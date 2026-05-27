@@ -123,6 +123,26 @@ function elementCursor(activeTool: DrawTool, locked: boolean | undefined) {
   return locked ? 'default' : 'pointer'
 }
 
+/**
+ * Drawing tools (pen, pencil, shapes, fill, etc.) need the pointer event to
+ * reach the canvas background even when the cursor lands on an existing
+ * element — otherwise users can't add a new path point on top of existing art.
+ */
+const DRAW_THROUGH_TOOLS: DrawTool[] = [
+  'pen',
+  'pencil',
+  'brush',
+  'eraser',
+  'rect',
+  'circle',
+  'ellipse',
+  'line',
+  'text'
+]
+function shouldDrawThrough(activeTool: DrawTool) {
+  return DRAW_THROUGH_TOOLS.includes(activeTool)
+}
+
 function El({
   el,
   symbols,
@@ -154,6 +174,12 @@ function El({
   const gsapDriver = useEditorStore((s) => s.gsapCanvasDriver)
   if (el.visible === false) return null
   const animateView = mode === 'animate' || mode === 'preview'
+  /**
+   * Draw view always renders the layer's resting pose (`el.transform` / `el.attrs`)
+   * so the artist sees the base shape and any Draw-mode edits land directly there.
+   * Animate / Preview sample the timeline at the playhead so keyframes drive the
+   * visible state.
+   */
   const timeSec = animateView ? playhead : currentTime
   const tracksForSample = animateView ? timelineTracks : tracks
   const tr0 = animateView
@@ -192,6 +218,7 @@ function El({
         onPointerDown={(e) => {
           if (el.locked) return
           if (activeTool === 'hand') return
+          if (shouldDrawThrough(activeTool)) return
           e.stopPropagation()
           onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
         }}
@@ -230,6 +257,7 @@ function El({
         onPointerDown={(e) => {
           if (el.locked) return
           if (activeTool === 'hand') return
+          if (shouldDrawThrough(activeTool)) return
           e.stopPropagation()
           onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
         }}
@@ -269,6 +297,7 @@ function El({
       onPointerDown={(e) => {
         if (el.locked) return
         if (activeTool === 'hand') return
+        if (shouldDrawThrough(activeTool)) return
         e.stopPropagation()
         onElementPointerDown(el.id, e.shiftKey, e.clientX, e.clientY, e.button)
       }}

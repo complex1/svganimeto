@@ -491,14 +491,6 @@ export function RightInspector() {
         : undefined
   const typographySectionDisabled = !canTypography
   const typographySectionReason = 'Typography applies to text layers only.'
-  const alignSectionReason = mode !== 'draw'
-    ? 'Switch to Draw mode to align layers.'
-    : 'Select two or more layers to align.'
-  const shapeBuilderReason = mode !== 'draw'
-    ? 'Switch to Draw mode for shape builder.'
-    : selectedIds.length < 2
-      ? 'Select two or more compatible shapes.'
-      : 'Selected layers must be paths or basic shapes with the same parent.'
 
   return (
     <aside className="area-inspector">
@@ -565,11 +557,47 @@ export function RightInspector() {
                   typeof el.attrs.__motionPathId === 'string' ? el.attrs.__motionPathId : ''
                 }
                 disabled={attrsUiLocked}
-                onChange={(e) =>
-                  setElementAttrs(el.id, {
-                    __motionPathId: e.target.value || ''
-                  })
-                }
+                onChange={(e) => {
+                  const nextId = e.target.value || ''
+                  const prevId =
+                    typeof el.attrs.__motionPathId === 'string' ? el.attrs.__motionPathId : ''
+                  /**
+                   * Motion path applies as a translation on top of the layer's x/y.
+                   * Adjust x/y so the visual position stays put when the path is
+                   * attached, swapped, or removed — otherwise the element jumps
+                   * to (anchorX + tr.x, anchorY + tr.y) on assignment.
+                   */
+                  const flat = flattenForLayers(elements)
+                  const getAnchor = (pathId: string): { x: number; y: number } | null => {
+                    if (!pathId) return null
+                    const pathEl = flat.find((x) => x.el.id === pathId)?.el
+                    if (!pathEl || pathEl.type !== 'path') return null
+                    const dAttr = typeof pathEl.attrs.d === 'string' ? pathEl.attrs.d : ''
+                    if (!dAttr) return null
+                    try {
+                      const tmp = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+                      tmp.setAttribute('d', dAttr)
+                      const pt = tmp.getPointAtLength(0)
+                      return {
+                        x: (pathEl.transform?.x ?? 0) + pt.x,
+                        y: (pathEl.transform?.y ?? 0) + pt.y
+                      }
+                    } catch {
+                      return null
+                    }
+                  }
+                  const prevAnchor = getAnchor(prevId) ?? { x: 0, y: 0 }
+                  const nextAnchor = getAnchor(nextId) ?? { x: 0, y: 0 }
+                  const dx = prevAnchor.x - nextAnchor.x
+                  const dy = prevAnchor.y - nextAnchor.y
+                  setElementAttrs(el.id, { __motionPathId: nextId })
+                  if (dx !== 0 || dy !== 0) {
+                    updateTransform(
+                      el.id,
+                      { x: el.transform.x + dx, y: el.transform.y + dy }
+                    )
+                  }
+                }}
                 style={{ maxWidth: '100%' }}
               >
                 <option value="">None</option>
@@ -1195,7 +1223,6 @@ export function RightInspector() {
               value={solidFillHex}
               disabled={attrsUiLocked}
               onChange={(e) => setElementAttrs(el.id, { fill: e.target.value })}
-              style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
             />
           </label>
         )}
@@ -1226,7 +1253,6 @@ export function RightInspector() {
                 value={fillValue.startsWith('#') ? fillValue : '#d1d5db'}
                 disabled={attrsUiLocked || fillNone}
                 onChange={(e) => setElementAttrs(el.id, { fill: e.target.value })}
-                style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
               />
             </label>
           </>
@@ -1242,7 +1268,6 @@ export function RightInspector() {
                   value={s.color.startsWith('#') ? s.color : '#888888'}
                   disabled={attrsUiLocked}
                   onChange={(e) => patchGradientStop(idx, { color: e.target.value })}
-                  style={{ width: '100%', height: 28, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
                 />
               </label>
             ))}
@@ -1290,7 +1315,6 @@ export function RightInspector() {
                 value={strokeValue.startsWith('#') ? strokeValue : '#5b8def'}
                 disabled={attrsUiLocked}
                 onChange={(e) => setElementAttrs(el.id, { stroke: e.target.value })}
-                style={{ width: '100%', height: 30, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
               />
             </label>
             <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center' }}>
@@ -1401,18 +1425,34 @@ export function RightInspector() {
         </label>
         <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <span style={{ color: 'var(--text-muted)' }}>Blur</span>
-          <input
-            type="range"
-            min={0}
-            max={30}
-            step={0.5}
-            value={blurFx}
-            disabled={attrsUiLocked}
-            onChange={(e) => {
-              const v = Number(e.target.value)
-              if (Number.isFinite(v)) setElementAttrs(el.id, { __fxBlur: Math.max(0, v) })
-            }}
-          />
+          <div className="slider-group">
+            <input
+              type="range"
+              min={0}
+              max={30}
+              step={0.5}
+              value={blurFx}
+              disabled={attrsUiLocked}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                if (Number.isFinite(v)) setElementAttrs(el.id, { __fxBlur: Math.max(0, v) })
+              }}
+            />
+            <input
+              type="number"
+              min={0}
+              max={30}
+              step={0.5}
+              value={Number(blurFx.toFixed(2))}
+              disabled={attrsUiLocked}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                if (Number.isFinite(v)) {
+                  setElementAttrs(el.id, { __fxBlur: Math.max(0, Math.min(30, v)) })
+                }
+              }}
+            />
+          </div>
         </label>
         <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <span style={{ color: 'var(--text-muted)' }}>Shadow</span>
@@ -1421,7 +1461,6 @@ export function RightInspector() {
             value={shadowColorFx.startsWith('#') ? shadowColorFx : '#000000'}
             disabled={attrsUiLocked || !effectsActive}
             onChange={(e) => setElementAttrs(el.id, { __fxShadowColor: e.target.value })}
-            style={{ width: '100%', height: 28, padding: 2, borderRadius: 6, border: '1px solid var(--border)' }}
           />
         </label>
         <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
@@ -1521,30 +1560,17 @@ export function RightInspector() {
           onToggle={() => toggleSection('layout')}
         >
           <div className="inspector-subsection-title">Alignment</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-          <Tooltip content="Align Left">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
             <button type="button" disabled={!canAlign} onClick={() => alignSelected('x', 'start')}>Left</button>
-          </Tooltip>
-          <Tooltip content="Align Center">
             <button type="button" disabled={!canAlign} onClick={() => alignSelected('x', 'center')}>Center</button>
-          </Tooltip>
-          <Tooltip content="Align Right">
             <button type="button" disabled={!canAlign} onClick={() => alignSelected('x', 'end')}>Right</button>
-          </Tooltip>
-          <Tooltip content="Align Top">
             <button type="button" disabled={!canAlign} onClick={() => alignSelected('y', 'start')}>Top</button>
-          </Tooltip>
-          <Tooltip content="Align Middle">
             <button type="button" disabled={!canAlign} onClick={() => alignSelected('y', 'center')}>Middle</button>
-          </Tooltip>
-          <Tooltip content="Align Bottom">
             <button type="button" disabled={!canAlign} onClick={() => alignSelected('y', 'end')}>Bottom</button>
-          </Tooltip>
-        </div>
+          </div>
 
           <div className="inspector-subsection-title">Shape builder</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
-          <Tooltip content="Union — merge into one path">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
             <button
               type="button"
               disabled={!canShapeBoolean}
@@ -1552,8 +1578,6 @@ export function RightInspector() {
             >
               Merge
             </button>
-          </Tooltip>
-          <Tooltip content="Subtract others from first selected">
             <button
               type="button"
               disabled={!canShapeBoolean}
@@ -1561,8 +1585,6 @@ export function RightInspector() {
             >
               Subtract
             </button>
-          </Tooltip>
-          <Tooltip content="Intersect all selections">
             <button
               type="button"
               disabled={!canShapeBoolean}
@@ -1570,8 +1592,6 @@ export function RightInspector() {
             >
               Intersect
             </button>
-          </Tooltip>
-          <Tooltip content="Symmetric difference">
             <button
               type="button"
               disabled={!canShapeBoolean}
@@ -1579,8 +1599,7 @@ export function RightInspector() {
             >
               Exclude
             </button>
-          </Tooltip>
-        </div>
+          </div>
         </InspectorCollapsibleSection>
       </div>
     </aside>

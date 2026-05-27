@@ -1094,13 +1094,14 @@ export function Canvas() {
         const stNow = useEditorStore.getState()
         const dragIds = stNow.selectedIds
         if (!dragIds.includes(id)) return
+        const inAnim = stNow.mode === 'animate' || stNow.mode === 'preview'
         const dragTargets = buildTransformDragTargets(
           svgEl,
           stNow.project.elements,
           dragIds,
           stNow.tracks,
-          stNow.currentTime,
-          stNow.mode === 'animate' || stNow.mode === 'preview',
+          inAnim ? stNow.currentTime : 0,
+          inAnim,
           stNow.gsapCanvasDriver
         )
         if (dragTargets.length === 0) return
@@ -1174,7 +1175,13 @@ export function Canvas() {
         activeTool
       )
     const targetEl = e.target as HTMLElement
+    /**
+     * For drawing tools, accept the click anywhere on the SVG (including over
+     * existing artwork) so the user can add points / start a stroke on top of
+     * existing elements. For select / marquee, require the artboard itself.
+     */
     const overArtboard = e.target === e.currentTarget || targetEl.dataset?.artboard === '1'
+    const overDrawSurface = drawEnabled || overArtboard
 
     if (mode === 'draw' && activeTool === 'select' && isLeft && overArtboard && !spaceDown) {
       const svg = svgRef.current
@@ -1193,7 +1200,7 @@ export function Canvas() {
       return
     }
 
-    if (drawEnabled && isLeft && overArtboard) {
+    if (drawEnabled && isLeft && overDrawSurface) {
       const svg = svgRef.current
       if (!svg) return
       const p = clientToSvg(svg, e.clientX, e.clientY)
