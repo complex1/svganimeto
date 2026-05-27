@@ -79,23 +79,31 @@ export function LeftToolbar() {
   return (
     <aside className="area-toolbar" aria-label="Drawing tools">
       <div className="toolbar-groups">
-        {TOOL_GROUPS.map((group) => (
-          <section key={group.id} className="toolbar-group" aria-label={group.label}>
-            {group.tools.map((tool) => (
-              <Tooltip key={tool.id} content={tool.label}>
-                <button
-                  type="button"
-                  className={activeTool === tool.id ? 'primary' : undefined}
-                  disabled={!toolEnabled(tool.id)}
-                  style={{ width: 36, height: 36, padding: 0 }}
-                  onClick={() => setActiveTool(tool.id)}
-                >
-                  <FontAwesomeIcon icon={tool.icon} />
-                </button>
-              </Tooltip>
-            ))}
-          </section>
-        ))}
+        {TOOL_GROUPS.map((group) => {
+          /**
+           * Only show tools that are usable in the current mode — in Animate / Preview
+           * the shape, paint, type, and pencil tools are inert, so hiding them keeps the
+           * toolbar focused on what can actually be done here (Select / Hand / Path Edit).
+           */
+          const visibleTools = group.tools.filter((t) => toolEnabled(t.id))
+          if (visibleTools.length === 0) return null
+          return (
+            <section key={group.id} className="toolbar-group" aria-label={group.label}>
+              {visibleTools.map((tool) => (
+                <Tooltip key={tool.id} content={tool.label}>
+                  <button
+                    type="button"
+                    className={activeTool === tool.id ? 'primary' : undefined}
+                    style={{ width: 36, height: 36, padding: 0 }}
+                    onClick={() => setActiveTool(tool.id)}
+                  >
+                    <FontAwesomeIcon icon={tool.icon} />
+                  </button>
+                </Tooltip>
+              ))}
+            </section>
+          )
+        })}
       </div>
     </aside>
   )

@@ -2369,7 +2369,7 @@ export function Canvas() {
           </g>
         )}
       </svg>
-      {mode !== 'export' && (
+      {mode === 'draw' && (
         <div
           style={{
             position: 'absolute',

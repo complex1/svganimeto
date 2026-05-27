@@ -615,10 +615,24 @@ export const useEditorStore = create<EditorState>((set, get) => {
         ) {
           nextTool = 'select'
         }
+        /**
+         * Crossing between Draw / Animate / Preview should give the user a clean
+         * slate: stop playback, rewind to t=0, and drop the current selection so
+         * the inspector and selection overlays don't carry stale state into the
+         * new mode.
+         */
+        const modeChanged = m !== s.mode
         return {
           mode: m,
           activeTool: nextTool,
-          ...(m !== s.mode ? { isPlaying: false } : {})
+          ...(modeChanged
+            ? {
+                isPlaying: false,
+                currentTime: 0,
+                selectedIds: [],
+                selectedKeyframes: []
+              }
+            : {})
         }
       }),
     setActiveTool: (tool) => set({ activeTool: tool }),
