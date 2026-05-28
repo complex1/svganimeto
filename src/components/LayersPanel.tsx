@@ -50,8 +50,13 @@ export function LayersPanel() {
   const mode = useEditorStore((s) => s.mode)
 
   const [collapsedIds, setCollapsedIds] = useState(() => new Set<string>())
+  /**
+   * Render siblings top-front-first (Photoshop / Figma convention). Drop hints stay
+   * authored in visual terms ('before' = above the target in the panel); we flip
+   * them to document order at the very edge before calling `reorderLayers`.
+   */
   const flat = useMemo(
-    () => flattenForLayers(elements, 0, collapsedIds),
+    () => flattenForLayers(elements, 0, collapsedIds, true),
     [elements, collapsedIds]
   )
   const collapsibleGroupIds = useMemo(() => collectGroupIdsWithChildren(elements), [elements])
@@ -60,7 +65,9 @@ export function LayersPanel() {
 
   const onDropItem = (targetId: string) => {
     if (!dragId || dragId === targetId || !dropHint) return
-    reorderLayers(dragId, targetId, dropHint.place)
+    /** Visual "before" (above in panel) maps to document "after" (higher in z-order). */
+    const docPlace = dropHint.place === 'before' ? 'after' : 'before'
+    reorderLayers(dragId, targetId, docPlace)
   }
 
   return (

@@ -36,6 +36,7 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
   const elements = useEditorStore((s) => s.project.elements)
   const mode = useEditorStore((s) => s.mode)
   const activeTool = useEditorStore((s) => s.activeTool)
+  const isPlaying = useEditorStore((s) => s.isPlaying)
   const updateTransform = useEditorStore((s) => s.updateTransform)
   const pushHistory = useEditorStore((s) => s.pushHistory)
 
@@ -137,7 +138,20 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
     return () => window.removeEventListener('pointerdown', onPointerDown)
   }, [pivotMenuOpen])
 
-  if (!selectedId || !box || mode === 'preview' || mode === 'export' || activeTool !== 'select') return null
+  /**
+   * Hide the selection overlay while the timeline is running so the user can watch
+   * playback unobstructed. The selection itself is preserved — pause and the
+   * handles reappear over the (now-stationary) element.
+   */
+  if (
+    !selectedId ||
+    !box ||
+    mode === 'preview' ||
+    mode === 'export' ||
+    activeTool !== 'select' ||
+    isPlaying
+  )
+    return null
   const svg = svgRef.current
   const wrap = wrapRef.current
   if (!svg || !wrap) return null

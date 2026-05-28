@@ -75,14 +75,21 @@ export function flattenForLayers(
   roots: VectorElement[],
   depth = 0,
   /** When set, group ids in this set are shown collapsed (children omitted from the list). */
-  collapsedGroupIds?: ReadonlySet<string> | null
+  collapsedGroupIds?: ReadonlySet<string> | null,
+  /**
+   * When true, siblings are emitted in reverse document order (Photoshop/Figma layout —
+   * top of the panel = front of the canvas). Parent headers are still emitted before
+   * their children so groups visually contain their kids.
+   */
+  reverseSiblings = false
 ): { el: VectorElement; depth: number }[] {
   const out: { el: VectorElement; depth: number }[] = []
-  for (const el of roots) {
+  const iter = reverseSiblings ? [...roots].slice().reverse() : roots
+  for (const el of iter) {
     out.push({ el, depth })
     const collapsed = collapsedGroupIds?.has(el.id)
     if (el.children?.length && !collapsed) {
-      out.push(...flattenForLayers(el.children, depth + 1, collapsedGroupIds))
+      out.push(...flattenForLayers(el.children, depth + 1, collapsedGroupIds, reverseSiblings))
     }
   }
   return out

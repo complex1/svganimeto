@@ -19,6 +19,8 @@ import type {
   NoiseDef
 } from '@/types/animation'
 import { mergeTransformFromTracks, sampleTrack } from '@/engines/animation/interpolate'
+import { sampleMergedTransformForElement } from '@/engines/animation/gsapTrackCompiler'
+import { getLocalShapeCenter } from '@/engines/geometry/localShapeBounds'
 import {
   ATTR_TEXT_STEP_PROPERTIES,
   hexToPackedRgb,
@@ -858,7 +860,57 @@ export const useEditorStore = create<EditorState>((set, get) => {
     updateTransform: (id, partial, opts) => {
       const s0 = get()
       const inAnimateLikeMode = s0.mode === 'animate' || s0.mode === 'preview'
-      const props = Object.keys(partial) as (keyof Transform)[]
+      /**
+       * Pivot-preserving expansion: when the caller only adjusts rotation/scale (and
+       * does NOT also supply explicit `x`/`y`), we silently fold in the translation
+       * needed to keep the element's local-bbox CENTER pinned in parent space. Without
+       * this the SVG transform `translate * rotate * scale` pivots around local origin
+       * `(0,0)`, which for a typical rect/path sits at the top-left of its art —
+       * yielding the "rotates around some random axis" feeling the user reported.
+       *
+       * Callers that already pass full `{x,y,rotation,scaleX,scaleY}` (selection-overlay
+       * drag, motion-path apply, etc.) opt out automatically.
+       */
+      let effectivePartial: Partial<Transform> = partial
+      const touchesRotOrScale =
+        'rotation' in partial || 'scaleX' in partial || 'scaleY' in partial
+      const suppliesPosition = 'x' in partial || 'y' in partial
+      if (touchesRotOrScale && !suppliesPosition) {
+        const fresh = flattenForLayers(s0.project.elements).find((x) => x.el.id === id)?.el
+        const onMotionPath =
+          fresh != null &&
+          typeof fresh.attrs.__motionPathId === 'string' &&
+          fresh.attrs.__motionPathId.length > 0
+        const cLocal = fresh != null ? getLocalShapeCenter(fresh) : null
+        if (fresh != null && cLocal != null && !onMotionPath) {
+          const baseT = inAnimateLikeMode
+            ? sampleMergedTransformForElement(
+                fresh,
+                s0.project.elements,
+                s0.tracks,
+                s0.currentTime,
+                s0.gsapCanvasDriver
+              )
+            : fresh.transform
+          const oldRad = (baseT.rotation * Math.PI) / 180
+          const cos0 = Math.cos(oldRad)
+          const sin0 = Math.sin(oldRad)
+          const oldCx =
+            baseT.x + cos0 * (baseT.scaleX * cLocal.x) - sin0 * (baseT.scaleY * cLocal.y)
+          const oldCy =
+            baseT.y + sin0 * (baseT.scaleX * cLocal.x) + cos0 * (baseT.scaleY * cLocal.y)
+          const newRotation = partial.rotation ?? baseT.rotation
+          const newScaleX = partial.scaleX ?? baseT.scaleX
+          const newScaleY = partial.scaleY ?? baseT.scaleY
+          const newRad = (newRotation * Math.PI) / 180
+          const cos1 = Math.cos(newRad)
+          const sin1 = Math.sin(newRad)
+          const newX = oldCx - cos1 * (newScaleX * cLocal.x) + sin1 * (newScaleY * cLocal.y)
+          const newY = oldCy - sin1 * (newScaleX * cLocal.x) - cos1 * (newScaleY * cLocal.y)
+          effectivePartial = { ...partial, x: newX, y: newY }
+        }
+      }
+      const props = Object.keys(effectivePartial) as (keyof Transform)[]
       /**
        * In Animate / Preview, only the keyframe at the playhead changes — the layer's
        * BASE transform (`el.transform`) must stay untouched so that Draw view always
@@ -869,7 +921,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         ? s0.project.elements
         : updateElementById(s0.project.elements, id, (el) => ({
             ...el,
-            transform: { ...el.transform, ...partial }
+            transform: { ...el.transform, ...effectivePartial }
           }))
       let newTracks = s0.tracks
       if (inAnimateLikeMode && !s0.isPlaying) {
@@ -880,7 +932,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
               !['x', 'y', 'scaleX', 'scaleY', 'rotation', 'opacity', 'skewX', 'skewY'].includes(key)
             )
               continue
-            const nextVal = (partial as Partial<Transform>)[key]
+            const nextVal = (effectivePartial as Partial<Transform>)[key]
             if (typeof nextVal !== 'number') continue
             newTracks = upsertKeyframeInTracks(
               newTracks,

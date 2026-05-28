@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faPause, faPlay, faRepeat, faStop } from '@fortawesome/free-solid-svg-icons'
+import { faPause, faPlay, faRepeat, faStop, faTrash } from '@fortawesome/free-solid-svg-icons'
 import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
 import type { AnimatableProperty, AnimationTrack, EasingId } from '@/types/animation'
@@ -69,6 +69,7 @@ export function TimelinePanel() {
   const setLoop = useEditorStore((s) => s.setLoop)
   const setDuration = useEditorStore((s) => s.setDuration)
   const tracks = useEditorStore((s) => s.tracks)
+  const setTracks = useEditorStore((s) => s.setTracks)
   const elements = useEditorStore((s) => s.project.elements)
   const fps = useEditorStore((s) => s.fps)
   const playbackSpeed = useEditorStore((s) => s.playbackSpeed)
@@ -464,14 +465,61 @@ export function TimelinePanel() {
         <div className="timeline-label-column" style={{ width: TRACK_LABEL_WIDTH }}>
           <div className="timeline-ruler-gutter" aria-hidden />
           {rows.map(({ track, label }) => (
-            <Tooltip
+            <div
               key={track.id}
-              content={label}
-              anchorClassName="tooltip-anchor--block"
-              anchorStyle={{ width: '100%', minWidth: 0 }}
+              className="track-label"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                paddingRight: 4,
+                minWidth: 0
+              }}
             >
-              <div className="track-label">{label}</div>
-            </Tooltip>
+              <Tooltip
+                content={label}
+                anchorClassName="tooltip-anchor--block"
+                anchorStyle={{ flex: 1, minWidth: 0 }}
+              >
+                <span
+                  style={{
+                    display: 'block',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {label}
+                </span>
+              </Tooltip>
+              <Tooltip content="Remove this property's animation">
+                <button
+                  type="button"
+                  aria-label={`Remove animation for ${label}`}
+                  onClick={() =>
+                    /**
+                     * Drop just this one track from the timeline. setTracks routes
+                     * through history so the user can undo if they didn't mean to.
+                     */
+                    setTracks(tracks.filter((t) => t.id !== track.id))
+                  }
+                  style={{
+                    flex: 'none',
+                    width: 22,
+                    height: 22,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                    background: 'transparent',
+                    color: 'var(--text-muted)',
+                    fontSize: 11
+                  }}
+                >
+                  <FontAwesomeIcon icon={faTrash} />
+                </button>
+              </Tooltip>
+            </div>
           ))}
         </div>
         <div ref={scrollRef} className="timeline-scroll">
