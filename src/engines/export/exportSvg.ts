@@ -156,7 +156,7 @@ function renderElement(
   let tr = el.transform
   if (tracks) {
     let mt = mergeTransformFromTracks(el.transform, el.id, tracks, timeSec)
-    mt = applyMotionPathToTransform(mt, el.attrs, project.elements, tracks, el.id, timeSec)
+    mt = applyMotionPathToTransform(mt, el, project.elements, tracks, timeSec)
     tr = mt
   }
   const editorT = transformToSvgString(tr)
@@ -210,7 +210,7 @@ function buildKeyframesCss(
     const keyframeBlocks = times.map((time) => {
       const pct = durationSec > 0 ? ((time / durationSec) * 100).toFixed(4) : '0'
       let mergedT = mergeTransformFromTracks(el.transform, el.id, tracks, time)
-      mergedT = applyMotionPathToTransform(mergedT, el.attrs, elements, tracks, el.id, time)
+      mergedT = applyMotionPathToTransform(mergedT, el, elements, tracks, time)
       const tr = transformToCssTransformValue(mergedT)
       const op = mergedT.opacity !== 1 ? `opacity:${mergedT.opacity};` : ''
       const mergedAttrs = mergeAttrsFromTracks(el.attrs, el.id, tracks, time) as Record<string, unknown>
@@ -291,7 +291,7 @@ export function exportStillFrameSvg(project: Project, tracks: AnimationTrack[], 
 
   function renderElementAtTime(el: VectorElement): string {
     let merged = mergeTransformFromTracks(el.transform, el.id, tracks, timeSec)
-    merged = applyMotionPathToTransform(merged, el.attrs, project.elements, tracks, el.id, timeSec)
+    merged = applyMotionPathToTransform(merged, el, project.elements, tracks, timeSec)
     const editorT = transformToSvgString(merged)
     const op = merged.opacity !== 1 ? ` opacity="${merged.opacity}"` : ''
     const mergedFx = mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, unknown>

@@ -185,7 +185,7 @@ function El({
   const tr0 = animateView
     ? sampleMergedTransformForElement(el, rootElements, tracksForSample, timeSec, gsapDriver)
     : el.transform
-  const tr = applyMotionPathToTransform(tr0, el.attrs, rootElements, tracksForSample, el.id, timeSec)
+  const tr = applyMotionPathToTransform(tr0, el, rootElements, tracksForSample, timeSec)
   const editorTransform = transformToSvgString(tr)
   const mergedAttrs = (
     animateView

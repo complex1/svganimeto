@@ -24,7 +24,11 @@ import {
   mergeAttrsFromTracks
 } from '@/engines/animation/attrAnimation'
 import { importSvgString } from '@/engines/importer/svgImporter'
-import { duplicateSelectedInDocument } from '@/engines/document/duplicateElements'
+import {
+  cloneSubtreeNewIds,
+  duplicateSelectedInDocument,
+  remapMotionPathIdsForClone
+} from '@/engines/document/duplicateElements'
 import { groupSelectedElements } from '@/engines/document/groupElements'
 import {
   findAncestorChain,
@@ -570,30 +574,71 @@ export const useEditorStore = create<EditorState>((set, get) => {
         void dialogAlert('Finish or cancel symbol editing before importing SVG.')
         return
       }
-      const p = importSvgString(svg, name ?? 'Imported')
-      // Raster traces can replace the doc with an enormous layer tree. Pushing a history snapshot
-      // clones the previous project via structuredClone — peak memory can OOM the renderer.
-      if (opts?.resetHistory) {
-        set({
-          project: p,
+      const imported = importSvgString(svg, name ?? 'Imported')
+      const state = get()
+      /**
+       * Replace mode: blow the doc away. Used by:
+       *   - raster traces (opts.resetHistory) — those subtrees are huge and a history
+       *     snapshot would structuredClone the previous project, risking OOM
+       *   - a freshly created, empty project — keeping the placeholder canvas would
+       *     waste the imported viewBox and leave the user with nothing to merge into
+       */
+      const isEmptyProject =
+        state.project.elements.length === 0 && state.tracks.length === 0
+      if (opts?.resetHistory || isEmptyProject) {
+        const apply: Partial<EditorState> = {
+          project: imported,
           selectedIds: [],
           selectedKeyframes: [],
           keyframeClipboard: null,
           tracks: [],
-          viewBox: { x: 0, y: 0, width: p.width, height: p.height },
-          historyPast: [],
-          historyFuture: []
-        })
-      } else {
-        withHistory(() => ({
-          project: p,
-          selectedIds: [],
-          selectedKeyframes: [],
-          keyframeClipboard: null,
-          tracks: [],
-          viewBox: { x: 0, y: 0, width: p.width, height: p.height }
-        }))
+          viewBox: { x: 0, y: 0, width: imported.width, height: imported.height }
+        }
+        if (opts?.resetHistory) {
+          set({ ...apply, historyPast: [], historyFuture: [] })
+        } else {
+          withHistory(() => apply)
+        }
+        return
       }
+
+      if (imported.elements.length === 0) {
+        void dialogAlert('Imported SVG produced no layers.')
+        return
+      }
+
+      /**
+       * Merge mode: re-ID every imported element so it cannot collide with existing
+       * layers (or with animation tracks pointing at existing layers), then wrap them
+       * in a single group named after the file. The group becomes the new selection
+       * so the user can immediately move/scale the import as one unit.
+       */
+      const reIded: VectorElement[] = []
+      for (const root of imported.elements) {
+        const { node, oldToNew } = cloneSubtreeNewIds(root)
+        const fixed = remapMotionPathIdsForClone(node, oldToNew)
+        /** cloneSubtreeNewIds appends " copy" to the root name; we want the original. */
+        reIded.push({ ...fixed, name: root.name })
+      }
+      const groupName = (name ?? 'Imported').replace(/\.svg$/i, '') || 'Imported'
+      const wrapper: VectorElement = {
+        id: nanoid(10),
+        name: groupName,
+        type: 'group',
+        attrs: {},
+        transform: defaultTransform(),
+        children: reIded,
+        visible: true,
+        locked: false
+      }
+      withHistory(() => ({
+        project: {
+          ...state.project,
+          elements: [...state.project.elements, wrapper]
+        },
+        selectedIds: [wrapper.id],
+        selectedKeyframes: []
+      }))
     },
 
     importRasterManualReference: (dataUrl, width, height, projectName) => {

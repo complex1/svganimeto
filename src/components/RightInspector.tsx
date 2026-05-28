@@ -166,6 +166,75 @@ export function RightInspector() {
     return flattenForLayers(elements).filter((x) => x.el.type === 'path')
   }, [elements])
 
+  /**
+   * Selection-wide helpers (computed before the single/multi branches so both views
+   * can offer Alignment + Shape Builder). They only depend on `selectedIds`, `mode`
+   * and the document tree — not on the focused element.
+   */
+  const canAlignSelection = selectedIds.length > 1 && mode === 'draw'
+  const BOOLEAN_TYPES_SET = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polygon', 'polyline'])
+  const canShapeBooleanSelection =
+    mode === 'draw' &&
+    selectedIds.length >= 2 &&
+    selectedIds.every((sid) => {
+      const node = flattenForLayers(elements).find((x) => x.el.id === sid)?.el
+      return node ? BOOLEAN_TYPES_SET.has(node.type) : false
+    })
+
+  const alignSelectedShared = (
+    axis: 'x' | 'y',
+    anchor: 'start' | 'center' | 'end'
+  ) => {
+    if (!canAlignSelection) return
+    const svg = document.querySelector('.canvas-wrap svg') as SVGSVGElement | null
+    if (!svg) return
+
+    const elementMap = new Map(flattenForLayers(elements).map((n) => [n.el.id, n.el]))
+    const alignables = selectedIds
+      .map((sid) => {
+        const node = svg.querySelector(`[data-el-id="${CSS.escape(sid)}"]`) as SVGGraphicsElement | null
+        const b = node ? bboxInSvgRootSpace(node, svg) : null
+        const elData = elementMap.get(sid)
+        if (!b || !elData || elData.locked) return null
+        return { id: sid, box: b, el: elData }
+      })
+      .filter(
+        (v): v is { id: string; box: { x: number; y: number; width: number; height: number }; el: VectorElement } =>
+          Boolean(v)
+      )
+    if (alignables.length < 2) return
+
+    const minX = Math.min(...alignables.map((a) => a.box.x))
+    const maxX = Math.max(...alignables.map((a) => a.box.x + a.box.width))
+    const minY = Math.min(...alignables.map((a) => a.box.y))
+    const maxY = Math.max(...alignables.map((a) => a.box.y + a.box.height))
+    const targetX = anchor === 'start' ? minX : anchor === 'center' ? (minX + maxX) / 2 : maxX
+    const targetY = anchor === 'start' ? minY : anchor === 'center' ? (minY + maxY) / 2 : maxY
+
+    pushHistory()
+    for (const a of alignables) {
+      if (axis === 'x') {
+        const currentAnchor =
+          anchor === 'start'
+            ? a.box.x
+            : anchor === 'center'
+              ? a.box.x + a.box.width / 2
+              : a.box.x + a.box.width
+        const dx = targetX - currentAnchor
+        updateTransform(a.id, { x: a.el.transform.x + dx }, { skipHistory: true })
+      } else {
+        const currentAnchor =
+          anchor === 'start'
+            ? a.box.y
+            : anchor === 'center'
+              ? a.box.y + a.box.height / 2
+              : a.box.y + a.box.height
+        const dy = targetY - currentAnchor
+        updateTransform(a.id, { y: a.el.transform.y + dy }, { skipHistory: true })
+      }
+    }
+  }
+
   if (selectedIds.length === 0) {
     return (
       <aside className="area-inspector">
@@ -210,6 +279,63 @@ export function RightInspector() {
                 onClick={() => useEditorStore.getState().duplicateSelection()}
               >
                 Duplicate selection
+              </button>
+            </div>
+          </InspectorCollapsibleSection>
+
+          <InspectorCollapsibleSection
+            sectionId="layout"
+            title="Layout"
+            expanded={openSections.layout}
+            onToggle={() => toggleSection('layout')}
+            info={
+              <>
+                Align distributes the selected layers against the bounding box of the
+                whole selection. Shape Builder performs boolean operations and requires
+                only shape-like layer types (path, rect, circle, ellipse, line,
+                polygon/polyline) in <strong>Draw</strong> mode.
+              </>
+            }
+          >
+            <div className="inspector-subsection-title">Alignment</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+              <button type="button" disabled={!canAlignSelection} onClick={() => alignSelectedShared('x', 'start')}>Left</button>
+              <button type="button" disabled={!canAlignSelection} onClick={() => alignSelectedShared('x', 'center')}>Center</button>
+              <button type="button" disabled={!canAlignSelection} onClick={() => alignSelectedShared('x', 'end')}>Right</button>
+              <button type="button" disabled={!canAlignSelection} onClick={() => alignSelectedShared('y', 'start')}>Top</button>
+              <button type="button" disabled={!canAlignSelection} onClick={() => alignSelectedShared('y', 'center')}>Middle</button>
+              <button type="button" disabled={!canAlignSelection} onClick={() => alignSelectedShared('y', 'end')}>Bottom</button>
+            </div>
+
+            <div className="inspector-subsection-title">Shape builder</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
+              <button
+                type="button"
+                disabled={!canShapeBooleanSelection}
+                onClick={() => applyBooleanOperation('union')}
+              >
+                Merge
+              </button>
+              <button
+                type="button"
+                disabled={!canShapeBooleanSelection}
+                onClick={() => applyBooleanOperation('subtract')}
+              >
+                Subtract
+              </button>
+              <button
+                type="button"
+                disabled={!canShapeBooleanSelection}
+                onClick={() => applyBooleanOperation('intersect')}
+              >
+                Intersect
+              </button>
+              <button
+                type="button"
+                disabled={!canShapeBooleanSelection}
+                onClick={() => applyBooleanOperation('xor')}
+              >
+                Exclude
               </button>
             </div>
           </InspectorCollapsibleSection>
@@ -274,7 +400,9 @@ export function RightInspector() {
     typeof el.attrs.ry === 'number' ? el.attrs.ry : Number(el.attrs.ry ?? 0)
   const canCornerRadius = el.type === 'rect'
   const canTypography = el.type === 'text'
-  const canAlign = selectedIds.length > 1 && mode === 'draw'
+  /** Alias the selection-wide helpers so the existing single-element JSX keeps reading naturally. */
+  const canAlign = canAlignSelection
+  const canShapeBoolean = canShapeBooleanSelection
   const isSymbolInstance = el.type === 'symbolInstance'
   const symbolMaster =
     isSymbolInstance && typeof el.attrs.__symbolId === 'string'
@@ -283,15 +411,6 @@ export function RightInspector() {
   const canFillGradient =
     !isSymbolInstance &&
     ['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'text'].includes(el.type)
-
-  const BOOLEAN_TYPES = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polygon', 'polyline'])
-  const canShapeBoolean =
-    mode === 'draw' &&
-    selectedIds.length >= 2 &&
-    selectedIds.every((sid) => {
-      const node = flattenForLayers(elements).find((x) => x.el.id === sid)?.el
-      return node ? BOOLEAN_TYPES.has(node.type) : false
-    })
 
   const applyFillMode = (m: 'none' | 'solid' | 'linear' | 'radial') => {
     if (attrsUiLocked) return
@@ -422,57 +541,8 @@ export function RightInspector() {
   const effectsActive =
     blurFx > 0 || shadowBlurFx > 0 || Math.abs(shadowXFx) > 0 || Math.abs(shadowYFx) > 0
 
-  const alignSelected = (
-    axis: 'x' | 'y',
-    anchor: 'start' | 'center' | 'end'
-  ) => {
-    if (!canAlign) return
-    const svg = document.querySelector('.canvas-wrap svg') as SVGSVGElement | null
-    if (!svg) return
-
-    const elementMap = new Map(flattenForLayers(elements).map((n) => [n.el.id, n.el]))
-    const alignables = selectedIds
-      .map((sid) => {
-        const node = svg.querySelector(`[data-el-id="${CSS.escape(sid)}"]`) as SVGGraphicsElement | null
-        const b = node ? bboxInSvgRootSpace(node, svg) : null
-        const elData = elementMap.get(sid)
-        if (!b || !elData || elData.locked) return null
-        return { id: sid, box: b, el: elData }
-      })
-      .filter((v): v is { id: string; box: { x: number; y: number; width: number; height: number }; el: typeof el } => Boolean(v))
-
-    if (alignables.length < 2) return
-
-    const minX = Math.min(...alignables.map((a) => a.box.x))
-    const maxX = Math.max(...alignables.map((a) => a.box.x + a.box.width))
-    const minY = Math.min(...alignables.map((a) => a.box.y))
-    const maxY = Math.max(...alignables.map((a) => a.box.y + a.box.height))
-    const targetX = anchor === 'start' ? minX : anchor === 'center' ? (minX + maxX) / 2 : maxX
-    const targetY = anchor === 'start' ? minY : anchor === 'center' ? (minY + maxY) / 2 : maxY
-
-    pushHistory()
-    for (const a of alignables) {
-      if (axis === 'x') {
-        const currentAnchor =
-          anchor === 'start'
-            ? a.box.x
-            : anchor === 'center'
-              ? a.box.x + a.box.width / 2
-              : a.box.x + a.box.width
-        const dx = targetX - currentAnchor
-        updateTransform(a.id, { x: a.el.transform.x + dx }, { skipHistory: true })
-      } else {
-        const currentAnchor =
-          anchor === 'start'
-            ? a.box.y
-            : anchor === 'center'
-              ? a.box.y + a.box.height / 2
-              : a.box.y + a.box.height
-        const dy = targetY - currentAnchor
-        updateTransform(a.id, { y: a.el.transform.y + dy }, { skipHistory: true })
-      }
-    }
-  }
+  /** Single-element view reuses the shared alignment routine. */
+  const alignSelected = alignSelectedShared
 
   const geometryTypeOnlyTransform = ['group', 'polygon', 'polyline', 'text'].includes(el.type)
   const geometrySectionDisabled = attrsUiLocked || geometryTypeOnlyTransform

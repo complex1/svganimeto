@@ -1,7 +1,15 @@
 import { nanoid } from 'nanoid'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faChevronDown, faChevronRight, faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons'
+import {
+  faChevronDown,
+  faChevronRight,
+  faExpand,
+  faEye,
+  faEyeSlash,
+  faMagnifyingGlassMinus,
+  faMagnifyingGlassPlus
+} from '@fortawesome/free-solid-svg-icons'
 import { useEditorStore } from '@/store/editorStore'
 import { dialogAlert, dialogConfirm } from '@/store/dialogStore'
 import { ElementRenderer } from '@/components/canvas/ElementRenderer'
@@ -19,7 +27,7 @@ import {
   sampleMergedAttrsForElement,
   syncGsapTrackTimelineTime
 } from '@/engines/animation/gsapTrackCompiler'
-import { defaultTransform, type VectorElement } from '@/types/document'
+import { defaultTransform } from '@/types/document'
 import { flattenForLayers, updateElementById } from '@/engines/document/tree'
 import type { DrawTool } from '@/store/editorStore'
 import type { PathPoint, PathPointMode } from '@/types/document'
@@ -630,29 +638,42 @@ export function Canvas() {
       }
       if (stamps.length === 0) return
 
-      const children: VectorElement[] = stamps.map((st, i) => ({
-        id: nanoid(8),
-        name: `Stamp ${i + 1}`,
-        type: 'circle',
-        attrs: {
-          cx: Number(st.cx.toFixed(2)),
-          cy: Number(st.cy.toFixed(2)),
-          r: Number(st.r.toFixed(2)),
-          fill: stroke.settings.color,
-          opacity: Number(st.opacity.toFixed(3)),
-          stroke: 'none'
-        },
-        transform: defaultTransform(),
-        visible: true,
-        locked: false
-      }))
+      /**
+       * Flatten every stamp into a single closed subpath ("circle as two half-arcs")
+       * and concatenate them into one `d`. Result: a single `path` element instead
+       * of a group of N circles — cleaner Layers panel, easier to move/animate as
+       * one unit, and far fewer DOM nodes on long strokes.
+       *
+       * Stamp-level opacity variance can't be expressed inside a single fill, so we
+       * collapse it to one `opacity` for the path. Using the average keeps the
+       * overall density close to what the user previewed (circles with a low alpha
+       * were doing the heavy lifting of softening edges). The user can still tweak
+       * opacity from the Inspector afterwards.
+       */
+      const subpaths: string[] = []
+      let opacitySum = 0
+      for (const st of stamps) {
+        const r = Number(st.r.toFixed(2))
+        const cx = Number(st.cx.toFixed(2))
+        const cy = Number(st.cy.toFixed(2))
+        subpaths.push(`M${cx - r} ${cy}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0Z`)
+        opacitySum += st.opacity
+      }
+      const d = subpaths.join(' ')
+      const avgOpacity = Number((opacitySum / stamps.length).toFixed(3))
 
       addElement({
         id: nanoid(10),
         name: `Brush ${project.elements.length + 1}`,
-        type: 'group',
-        attrs: {},
-        children,
+        type: 'path',
+        attrs: {
+          d,
+          fill: stroke.settings.color,
+          /** Overlapping stamps should fill, not punch holes — nonzero handles either winding. */
+          'fill-rule': 'nonzero',
+          stroke: 'none',
+          opacity: avgOpacity
+        },
         transform: defaultTransform(),
         visible: true,
         locked: false
@@ -852,6 +873,25 @@ export function Canvas() {
         current.inY = current.y
       }
     }
+    setElementAttrs(selectedPath.id, {
+      __pathPoints: points,
+      __pathClosed: selectedPath.closed,
+      d: pathDFromPoints(points, selectedPath.closed)
+    })
+  }
+
+  /**
+   * Remove the anchor at `pointIdx`. Refuses to drop below 2 anchors (a path of one
+   * point isn't drawable). Pushes history so the user can undo a wrong delete.
+   */
+  const deletePathPoint = (pointIdx: number) => {
+    if (!selectedPath) return
+    if (selectedPath.points.length <= 2) return
+    if (pointIdx < 0 || pointIdx >= selectedPath.points.length) return
+    pushHistory()
+    const points = selectedPath.points
+      .filter((_, i) => i !== pointIdx)
+      .map((p) => ({ ...p }))
     setElementAttrs(selectedPath.id, {
       __pathPoints: points,
       __pathClosed: selectedPath.closed,
@@ -1238,6 +1278,18 @@ export function Canvas() {
         return
       }
       if (activeTool === 'pen') {
+        /**
+         * `detail` is the click-count on the underlying MouseEvent. ≥ 2 means this
+         * is the second (or later) click of a quick double-click sequence, which we
+         * want to treat as "I'm done" — finish the path without dropping another
+         * point on top of the one we just placed. Same end-state as pressing Enter.
+         */
+        if (e.detail >= 2 && penDraft) {
+          commitPenPath(penDraft.points)
+          setPenDraft(null)
+          penPointerRef.current = null
+          return
+        }
         if (!penDraft) {
           setPenDraft({ points: [{ x: p.x, y: p.y, mode: 'corner' }], hover: p })
           penPointerRef.current = { pointerId: e.pointerId, idx: 0, origin: p }
@@ -2898,6 +2950,37 @@ export function Canvas() {
                 {opt.label}
               </button>
             ))}
+            {(() => {
+              const canDelete = selectedPath.points.length > 2
+              return (
+                <>
+                  <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+                  <button
+                    type="button"
+                    disabled={!canDelete}
+                    title={canDelete ? undefined : 'A path needs at least 2 points'}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '6px 8px',
+                      border: 'none',
+                      background: 'transparent',
+                      color: canDelete ? 'var(--danger, #e5484d)' : 'var(--text-muted)',
+                      fontSize: 12,
+                      borderRadius: 4,
+                      cursor: canDelete ? 'pointer' : 'not-allowed'
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deletePathPoint(pathPointMenu.pointIdx)
+                      setPathPointMenu(null)
+                    }}
+                  >
+                    Delete point
+                  </button>
+                </>
+              )
+            })()}
           </div>
         </div>
       )}
@@ -2906,6 +2989,111 @@ export function Canvas() {
         !(activeTool === 'path-edit' && selectedPath) && (
         <SelectionOverlay svgRef={svgRef} wrapRef={wrapRef} />
       )}
+      {mode !== 'export' && (
+        <CanvasZoomControls
+          viewBox={viewBox}
+          projectWidth={project.width}
+          projectHeight={project.height}
+          setViewBox={setViewBox}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Floating zoom controls anchored to the bottom-right of the canvas viewport.
+ * Zoom % is derived from the project's intrinsic width vs the current viewBox width
+ * so it reflects what the user actually sees (smaller viewBox = more zoomed in).
+ *
+ * Zoom in/out re-use the same anchor-preserving math as the wheel handler, but
+ * centred on the viewBox midpoint so the canvas appears to grow/shrink in place
+ * instead of drifting toward a cursor that isn't there.
+ */
+function CanvasZoomControls({
+  viewBox,
+  projectWidth,
+  projectHeight,
+  setViewBox
+}: {
+  viewBox: { x: number; y: number; width: number; height: number }
+  projectWidth: number
+  projectHeight: number
+  setViewBox: (vb: { x: number; y: number; width: number; height: number }) => void
+}) {
+  /** Project units per viewBox unit. = 1 when the canvas is shown at native size. */
+  const zoomPct = projectWidth > 0 ? Math.round((projectWidth / viewBox.width) * 100) : 100
+
+  const zoomBy = (factor: number) => {
+    const cx = viewBox.x + viewBox.width / 2
+    const cy = viewBox.y + viewBox.height / 2
+    const nw = Math.max(50, viewBox.width / factor)
+    const nh = Math.max(50, viewBox.height / factor)
+    setViewBox({ x: cx - nw / 2, y: cy - nh / 2, width: nw, height: nh })
+  }
+
+  const fitToScreen = () => {
+    setViewBox({ x: 0, y: 0, width: projectWidth, height: projectHeight })
+  }
+
+  const btnStyle: React.CSSProperties = {
+    width: 30,
+    height: 30,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0
+  }
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        right: 12,
+        bottom: 12,
+        zIndex: 11,
+        pointerEvents: 'auto',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        background: 'var(--bg-panel)',
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: '6px 8px',
+        boxShadow: '0 6px 20px rgba(0,0,0,0.22)'
+      }}
+    >
+      <Tooltip content="Zoom out">
+        <button type="button" style={btnStyle} onClick={() => zoomBy(1 / 1.2)} aria-label="Zoom out">
+          <FontAwesomeIcon icon={faMagnifyingGlassMinus} />
+        </button>
+      </Tooltip>
+      <Tooltip content="Reset to 100%">
+        <button
+          type="button"
+          style={{
+            minWidth: 56,
+            height: 30,
+            padding: '0 8px',
+            fontSize: 12,
+            fontVariantNumeric: 'tabular-nums'
+          }}
+          onClick={fitToScreen}
+          aria-label="Reset zoom"
+        >
+          {zoomPct}%
+        </button>
+      </Tooltip>
+      <Tooltip content="Zoom in">
+        <button type="button" style={btnStyle} onClick={() => zoomBy(1.2)} aria-label="Zoom in">
+          <FontAwesomeIcon icon={faMagnifyingGlassPlus} />
+        </button>
+      </Tooltip>
+      <Tooltip content="Fit to screen">
+        <button type="button" style={btnStyle} onClick={fitToScreen} aria-label="Fit to screen">
+          <FontAwesomeIcon icon={faExpand} />
+        </button>
+      </Tooltip>
     </div>
   )
 }
