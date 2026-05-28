@@ -13,32 +13,47 @@ const FEATURES = [
   {
     icon: '◆',
     title: 'Draw + animate in one flow',
-    body: 'Vector tools, timeline keyframes, motion paths, symbols, and export without leaving the artboard mental model.'
+    body: 'Vector tools, timeline keyframes, motion paths, symbols, and export—all in one workspace, no round-trip to another app.'
+  },
+  {
+    icon: '✎',
+    title: 'Texture brushes along any path',
+    body: 'Pencil, charcoal, brush, marker, crayon, ink, fur, and grass stamps that follow the path tangent — natural strokes without losing vector edit.'
+  },
+  {
+    icon: '∿',
+    title: 'Organic noise & wiggle',
+    body: 'Layer deterministic value-noise on transform properties for idle motion, camera shake, or flickering opacity—layered on top of keyframes.'
+  },
+  {
+    icon: '✦',
+    title: 'Animation presets',
+    body: 'A browsable, previewable preset library: configure each effect, see the preview loop, then apply at 0s or the playhead.'
+  },
+  {
+    icon: '◉',
+    title: 'Symbols with their own timeline',
+    body: 'Convert any selection into a looping symbol—its animation rides every instance independently of the main playhead.'
+  },
+  {
+    icon: '▶',
+    title: 'Pre-rendered preview',
+    body: 'Preview bakes every frame at the project FPS and plays the cached video back—jitter-free even on heavy texture/noise scenes.'
   },
   {
     icon: '◇',
     title: 'True SVG pipeline',
-    body: 'Transforms and animatable attributes stay in SVG space—ideal when you need crisp scaling and accessible output.'
+    body: 'Transforms and animatable attributes stay in SVG space—crisp scaling, accessible output, and no proprietary runtime.'
+  },
+  {
+    icon: '▣',
+    title: 'Export that matches your stack',
+    body: 'Self-contained animated SVG, HTML with CSS keyframes, GIF, or browser-recorded WebM/MP4 — texture stamps are baked, hidden layers are stripped.'
   },
   {
     icon: '◎',
     title: 'Desktop & web storage',
     body: 'IndexedDB in the browser, filesystem on Electron, with a storage port ready for a future hosted backend.'
-  },
-  {
-    icon: '▣',
-    title: 'Export that matches your stack',
-    body: 'Self-contained animated SVG, HTML with CSS keyframes, GIF, or browser-recorded WebM/MP4 when available.'
-  },
-  {
-    icon: '⎔',
-    title: 'GSAP-backed preview path',
-    body: 'Optional compiled timeline driver for parity checks between classic sampling and GSAP-driven motion.'
-  },
-  {
-    icon: '✦',
-    title: 'Open source',
-    body: 'Inspect, fork, and extend on GitHub—no subscription wall on the codebase itself.'
   }
 ] as const
 
@@ -187,8 +202,9 @@ export function LandingPage() {
               ))}
             </h1>
             <p className="landing-hero-lead">
-              {APP_TAGLINE}. svgAnimeto combines Illustrator-style layout with a keyframe timeline, motion paths, and
-              export options so your SVGs stay sharp from first sketch to shipped animation.
+              {APP_TAGLINE}. svgAnimeto combines an Illustrator-style canvas with a keyframe timeline, motion paths,
+              texture brushes, per-element noise, looping symbol clips, and a pre-rendered preview — so your SVGs stay
+              sharp from first sketch to shipped animation.
             </p>
             <div className="landing-hero-ctas">
               <Link className="landing-btn landing-btn--primary" to={routes.dashboard}>

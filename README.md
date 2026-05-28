@@ -6,12 +6,35 @@
 
 ## Features at a glance
 
-- **Vector editing**: shapes, pen, pencil, path editing, brush, fill, eraser, text, shape builder (boolean-style operations on paths).
-- **Animation**: per-property tracks (`x`, `y`, rotation, opacity, colors, path `d`, motion path, effects, and more), scrubbable timeline, optional auto-keyframing at the playhead.
-- **Preview**: fullscreen preview driven by the same timeline engine.
-- **Export**: animated SVG, standalone HTML, GIF, or raster video (see [User guide — Export](docs/user-guide.md#export)).
-- **Projects**: library on the home screen; `.svgmotion` JSON for save/open (Electron) or IndexedDB in the browser build.
-- **Import**: SVG files; raster images with optional trace wizard or manual reference tracing.
+### Vector editing
+- Shapes, pen, **pencil with editable Bézier anchors**, path editing, brush, fill, eraser, text, **shape builder** (booleans).
+- **Texture brushes** along any path/polyline/line: pencil, charcoal, brush, marker, crayon, ink, fur, grass — each stamp rotates with the path tangent.
+- Pivot-preserving rotation and scale (transform around the visible bbox centre instead of the local origin).
+- Multi-select alignment + shape builder, canvas zoom controls, right-click → delete on path anchors.
+
+### Animation
+- Per-property tracks (`x`, `y`, rotation, opacity, colors, path `d`, motion path, blur/shadow, mask/clip/filter…), scrubbable timeline, optional auto-keyframing.
+- **Animation presets**: configurable, previewable preset library you can apply to any selection.
+- **Noise / wiggle** per element: layered organic jitter over transform properties for a chosen time window.
+- **Symbols with their own timeline** that loop independently of the main playhead on every instance; converting a selection to a symbol carries its keyframes along.
+- Centripetal Catmull–Rom path morphing and linear-light RGB colour interpolation for natural in-betweens.
+
+### Preview
+- Fullscreen **pre-rendered preview**: every frame is rasterised at the project FPS up-front, then played back like a video for jitter-free playback even on heavy scenes.
+- Built-in scrub slider, loop, speed, and on-the-fly re-bake.
+
+### Export
+- Animated SVG (CSS `@keyframes`), standalone HTML, GIF, raster video (WebM / MP4 where supported).
+- Hidden layers are filtered out; texture-brush stamps are baked into the output.
+
+### Workspace
+- **Landing page** (`#/`) + **Dashboard** (`#/dashboard`) project library + per-project editor route `#/editor/:projectId`.
+- Resizable panels, collapsible inspector sections, editable project names, global tooltips.
+- `.svgmotion` JSON for save/open (Electron) or IndexedDB in the browser build.
+
+### Import
+- SVG files merge as a new layer group (existing scene is preserved).
+- Raster images with the trace wizard or a manual reference workflow.
 
 ## Requirements
 
