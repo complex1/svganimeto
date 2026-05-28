@@ -151,7 +151,9 @@ function El({
   gsapCanvasDriver,
   rootElements,
   activeTool,
-  onElementPointerDown
+  onElementPointerDown,
+  timeOverride,
+  tracksOverride
 }: {
   el: VectorElement
   symbols: SymbolDefinition[]
@@ -167,6 +169,10 @@ function El({
     clientY: number,
     button: number
   ) => void
+  /** When set (e.g. inside a symbol instance) sample at this time instead of the playhead. */
+  timeOverride?: number
+  /** When set, sample these tracks instead of the live project timeline. */
+  tracksOverride?: AnimationTrack[]
 }) {
   const mode = useEditorStore((s) => s.mode)
   const playhead = useEditorStore((s) => s.currentTime)
@@ -175,20 +181,29 @@ function El({
   if (el.visible === false) return null
   const animateView = mode === 'animate' || mode === 'preview'
   /**
-   * Draw view always renders the layer's resting pose (`el.transform` / `el.attrs`)
-   * so the artist sees the base shape and any Draw-mode edits land directly there.
-   * Animate / Preview sample the timeline at the playhead so keyframes drive the
-   * visible state.
+   * Draw view normally renders the layer's resting pose, but when we're inside a
+   * symbol instance (`timeOverride` / `tracksOverride` set) we always sample so the
+   * symbol's own timeline animates the instance on the main canvas even in Draw.
    */
-  const timeSec = animateView ? playhead : currentTime
-  const tracksForSample = animateView ? timelineTracks : tracks
-  const tr0 = animateView
+  const insideSymbolScope = tracksOverride !== undefined && timeOverride !== undefined
+  const shouldSample = insideSymbolScope || animateView
+  const timeSec = insideSymbolScope
+    ? (timeOverride as number)
+    : animateView
+      ? playhead
+      : currentTime
+  const tracksForSample = insideSymbolScope
+    ? (tracksOverride as AnimationTrack[])
+    : animateView
+      ? timelineTracks
+      : tracks
+  const tr0 = shouldSample
     ? sampleMergedTransformForElement(el, rootElements, tracksForSample, timeSec, gsapDriver)
     : el.transform
   const tr = applyMotionPathToTransform(tr0, el, rootElements, tracksForSample, timeSec)
   const editorTransform = transformToSvgString(tr)
   const mergedAttrs = (
-    animateView
+    shouldSample
       ? sampleMergedAttrsForElement(el, tracksForSample, timeSec, gsapDriver)
       : el.attrs
   ) as VectorElement['attrs']
@@ -205,6 +220,33 @@ function El({
     const def = symbols.find((s) => s.id === sid)
     if (!def) return null
     const clone = cloneSymbolTemplateForInstance(def.template, el.id)
+
+    /**
+     * If the symbol carries its own animation, drive the cloned subtree from it.
+     * - `tracks` are remapped so each elementId is prefixed to match the clone's id
+     *   (`${instanceId}_sym_${templateId}`) — exactly what cloneSymbolTemplateForInstance produces.
+     * - `time` is the project playhead modulo the symbol's duration when looping,
+     *   otherwise clamped to [0, duration]. This gives every instance its own running
+     *   clock relative to the main canvas, independent of the main timeline.
+     */
+    const symAnim = def.animation
+    let childTimeOverride = timeOverride
+    let childTracksOverride = tracksOverride
+    if (symAnim && symAnim.tracks.length > 0 && symAnim.duration > 0) {
+      const prefix = `${el.id}_sym_`
+      const remappedTracks: AnimationTrack[] = symAnim.tracks.map((t) => ({
+        ...t,
+        elementId: `${prefix}${t.elementId}`
+      }))
+      const baseTime = animateView ? playhead : currentTime
+      const loopOn = symAnim.loop !== false
+      const symTime = loopOn
+        ? ((baseTime % symAnim.duration) + symAnim.duration) % symAnim.duration
+        : Math.max(0, Math.min(symAnim.duration, baseTime))
+      childTimeOverride = symTime
+      childTracksOverride = remappedTracks
+    }
+
     return (
       <g
         data-el-id={el.id}
@@ -238,6 +280,8 @@ function El({
           rootElements={rootElements}
           activeTool={activeTool}
           onElementPointerDown={onElementPointerDown}
+          timeOverride={childTimeOverride}
+          tracksOverride={childTracksOverride}
         />
       </g>
     )
@@ -273,11 +317,13 @@ function El({
               el={c}
               symbols={symbols}
               tracks={tracks}
-          currentTime={currentTime}
-          gsapCanvasDriver={gsapCanvasDriver}
-          rootElements={rootElements}
+              currentTime={currentTime}
+              gsapCanvasDriver={gsapCanvasDriver}
+              rootElements={rootElements}
               activeTool={activeTool}
               onElementPointerDown={onElementPointerDown}
+              timeOverride={timeOverride}
+              tracksOverride={tracksOverride}
             />
           ))}
         </g>

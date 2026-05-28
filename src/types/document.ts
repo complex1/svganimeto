@@ -72,6 +72,17 @@ export type SymbolDefinition = {
   name: string
   /** Root group or shape; transforms at root are relative to each instance. */
   template: VectorElement
+  /**
+   * Optional self-contained timeline that drives every instance on the main canvas.
+   * Track `elementId`s reference ids inside `template`. When `loop` is true (default)
+   * the instance plays the symbol's clip on a loop independent of the project's
+   * playhead — useful for spinners, idle motions, blinking icons, etc.
+   */
+  animation?: {
+    tracks: import('./animation').AnimationTrack[]
+    duration: number
+    loop?: boolean
+  }
 }
 
 export type Project = {

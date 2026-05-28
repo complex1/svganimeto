@@ -26,7 +26,9 @@ export function SymbolEditBanner() {
         <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>{backup.symbolName}</span>
       </span>
       <span style={{ fontSize: 12, color: 'var(--text-muted)', flex: 1, minWidth: 160 }}>
-        Edit the master below. Done saves to all instances; Cancel restores the main document unchanged.
+        Edit the master below. Keyframes you add here become the symbol's own timeline and
+        play on every instance (looped when Loop is on). Done saves; Cancel restores the
+        main document unchanged.
       </span>
       <div style={{ display: 'flex', gap: 8 }}>
         <button type="button" className="primary" onClick={() => commitSymbolEdit()}>

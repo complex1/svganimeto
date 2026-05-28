@@ -149,21 +149,28 @@ export function TopBar() {
         </Tooltip>
       )}
       <div className="mode-toggle">
-        {modes.map((m) => (
-          <Tooltip
-            key={m.id}
-            content={symbolEditing ? 'Finish symbol editing first' : undefined}
-          >
-            <button
-              type="button"
-              disabled={symbolEditing}
-              className={clsx(mode === m.id && 'active')}
-              onClick={() => setMode(m.id)}
-            >
-              {m.label}
-            </button>
-          </Tooltip>
-        ))}
+        {modes.map((m) => {
+          /**
+           * While editing a symbol the user may want to switch between Draw and
+           * Animate to author the symbol's own timeline. Only Export is blocked —
+           * exporting from inside a symbol-edit scope would render the symbol's
+           * template instead of the main document.
+           */
+          const blocked = symbolEditing && m.id === 'export'
+          const tooltip = blocked ? 'Finish symbol editing first' : undefined
+          return (
+            <Tooltip key={m.id} content={tooltip}>
+              <button
+                type="button"
+                disabled={blocked}
+                className={clsx(mode === m.id && 'active')}
+                onClick={() => setMode(m.id)}
+              >
+                {m.label}
+              </button>
+            </Tooltip>
+          )
+        })}
       </div>
       <Tooltip
         content={

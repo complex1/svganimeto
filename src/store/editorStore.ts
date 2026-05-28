@@ -1605,9 +1605,35 @@ export const useEditorStore = create<EditorState>((set, get) => {
         void dialogAlert('Select one or more top-level layers (not nested groups, not symbol instances).')
         return
       }
+      /**
+       * Walk the source subtree producing fresh ids AND a parallel id map. We need
+       * the map to (a) remap any tracks the user had on the converted layers and
+       * (b) rewire `__motionPathId` references so they still point inside the new
+       * template. `deepCloneElementNewIds` doesn't expose a map so we do the walk
+       * inline.
+       */
+      const cloneWithMap = (
+        node: VectorElement,
+        map: Map<string, string>
+      ): VectorElement => {
+        const newId = nanoid(10)
+        map.set(node.id, newId)
+        return {
+          ...node,
+          id: newId,
+          attrs: JSON.parse(JSON.stringify(node.attrs)) as VectorElement['attrs'],
+          transform: { ...node.transform },
+          children: node.children?.map((c) => cloneWithMap(c, map))
+        }
+      }
+      const idMap = new Map<string, string>()
+      const clonedRoots = roots.map((r) => cloneWithMap(r, idMap))
+      /** Patch internal motion-path refs so a "follow path" inside the symbol still resolves. */
+      const remappedRoots = clonedRoots.map((c) => remapMotionPathIdsForClone(c, idMap))
+
       let template: VectorElement
-      if (roots.length === 1) {
-        template = deepCloneElementNewIds(roots[0]!)
+      if (remappedRoots.length === 1) {
+        template = remappedRoots[0]!
       } else {
         template = {
           id: nanoid(10),
@@ -1617,15 +1643,52 @@ export const useEditorStore = create<EditorState>((set, get) => {
           transform: defaultTransform(),
           visible: true,
           locked: false,
-          children: roots.map((r) => deepCloneElementNewIds(r))
+          children: remappedRoots
         }
       }
       const symName = name ?? roots[0]?.name ?? 'Symbol'
-      const sym: SymbolDefinition = { id: nanoid(8), name: symName, template }
-      const removeIds = new Set(roots.map((r) => r.id))
+
+      /**
+       * Carry every track whose element ended up inside the template. The track's
+       * `elementId` is remapped to the new template id; keyframes get fresh ids so
+       * they don't share identity with the main timeline (the user can still keep
+       * the source kfs in undo history by undoing the convert).
+       *
+       * If nothing was animated, the symbol is born static (no `animation` field).
+       */
+      const carriedTracks: AnimationTrack[] = []
+      for (const t of s0.tracks) {
+        const newElId = idMap.get(t.elementId)
+        if (newElId === undefined || t.keyframes.length === 0) continue
+        carriedTracks.push({
+          id: nanoid(8),
+          elementId: newElId,
+          property: t.property,
+          keyframes: t.keyframes.map((k) => ({ ...k, id: nanoid(8) }))
+        })
+      }
+      const symAnimation =
+        carriedTracks.length > 0
+          ? {
+              tracks: carriedTracks,
+              /** Reuse the project's current duration so the symbol clip plays at the same pace the user authored against. */
+              duration: s0.duration,
+              loop: true
+            }
+          : undefined
+
+      const sym: SymbolDefinition = {
+        id: nanoid(8),
+        name: symName,
+        template,
+        animation: symAnimation
+      }
+      /** Drop main-timeline tracks for any source element that became part of the symbol (root OR descendant). */
+      const droppedSourceIds = new Set(idMap.keys())
+      const removeRootIds = new Set(roots.map((r) => r.id))
       withHistory((s) => {
-        const nextElements = s.project.elements.filter((e) => !removeIds.has(e.id))
-        const nextTracks = s.tracks.filter((t) => !removeIds.has(t.elementId))
+        const nextElements = s.project.elements.filter((e) => !removeRootIds.has(e.id))
+        const nextTracks = s.tracks.filter((t) => !droppedSourceIds.has(t.elementId))
         return {
           project: {
             ...s.project,
@@ -1748,6 +1811,12 @@ export const useEditorStore = create<EditorState>((set, get) => {
         autoKeyframe: s.autoKeyframe,
         isPlaying: s.isPlaying
       }
+      /**
+       * Load any previously authored symbol animation into the editor's working state
+       * so the user can keep tweaking it. Defaults (3s, loop) are picked to match the
+       * playback semantics on the main canvas, so a fresh symbol animation just works.
+       */
+      const symAnim = sym.animation
       set({
         symbolEditBackup: { symbolId, symbolName: sym.name, restore },
         project: {
@@ -1756,7 +1825,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
           elements: [structuredClone(sym.template)],
           symbols: structuredClone(s.project.symbols)
         },
-        tracks: [],
+        tracks: symAnim ? structuredClone(symAnim.tracks) : [],
+        duration: symAnim?.duration ?? 3,
+        loop: symAnim?.loop ?? true,
         selectedIds: [],
         selectedKeyframes: [],
         keyframeClipboard: null,
@@ -1795,8 +1866,31 @@ export const useEditorStore = create<EditorState>((set, get) => {
         }
       }
       const main = b.restore.project
+      /**
+       * Capture whatever tracks/duration/loop the user authored in the symbol editor
+       * and bake them into the symbol definition. We only keep tracks that target ids
+       * that actually live in the new template — anything else would dangle.
+       */
+      const editorState = get()
+      const liveTracks = editorState.tracks
+      const templateIds = new Set<string>()
+      const collectIds = (node: VectorElement) => {
+        templateIds.add(node.id)
+        node.children?.forEach(collectIds)
+      }
+      collectIds(template)
+      const animationTracks = liveTracks
+        .filter((t) => templateIds.has(t.elementId) && t.keyframes.length > 0)
+        .map((t) => structuredClone(t))
+      const symbolAnimation = animationTracks.length > 0
+        ? {
+            tracks: animationTracks,
+            duration: editorState.duration,
+            loop: editorState.loop
+          }
+        : undefined
       const nextSymbols = main.symbols.map((x) =>
-        x.id === b.symbolId ? { ...x, template } : x
+        x.id === b.symbolId ? { ...x, template, animation: symbolAnimation } : x
       )
       set({
         symbolEditBackup: null,
