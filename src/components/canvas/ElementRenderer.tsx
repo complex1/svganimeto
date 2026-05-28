@@ -4,6 +4,11 @@ import type { SymbolDefinition, VectorElement } from '@/types/document'
 import { applyMotionPathToTransform } from '@/engines/animation/motionPathApply'
 import { applyNoiseToTransform } from '@/engines/animation/noise'
 import {
+  extractGuidePathD,
+  TEXTURE_BRUSH_ELIGIBLE_TYPES
+} from '@/engines/texture/textureBrushes'
+import { TexturedStrokeLayer } from '@/components/canvas/TexturedStrokeLayer'
+import {
   sampleMergedAttrsForElement,
   sampleMergedTransformForElement
 } from '@/engines/animation/gsapTrackCompiler'
@@ -334,6 +339,19 @@ function El({
     )
   }
 
+  /**
+   * Texture-brush overlay: walk the host path and stamp small shapes along it.
+   * Sits inside the host's `<g>` so the editor transform + motion path follow it.
+   * The original shape is still rendered above/below — artists can set the
+   * stroke to `none` to leave only the texture, or keep it for a layered look.
+   */
+  const textureBrush = el.textureBrush
+  const canHostTexture =
+    textureBrush != null && TEXTURE_BRUSH_ELIGIBLE_TYPES.includes(el.type)
+  const guideD = canHostTexture
+    ? extractGuidePathD(el.type, shapeAttrs as Record<string, unknown>)
+    : null
+
   return (
     <g
       data-el-id={el.id}
@@ -352,6 +370,13 @@ function El({
       }}
     >
       <InnerShape el={{ ...el, attrs: shapeAttrs }} />
+      {textureBrush && guideD ? (
+        <TexturedStrokeLayer
+          pathD={guideD}
+          brush={textureBrush}
+          hostAttrs={shapeAttrs as Record<string, unknown>}
+        />
+      ) : null}
     </g>
   )
 }

@@ -33,7 +33,7 @@ import type { DrawTool } from '@/store/editorStore'
 import type { PathPoint, PathPointMode } from '@/types/document'
 import { buildFillPathFromRasterSample } from '@/engines/geometry/rasterBucketFill'
 import { elementShapeToPathD } from '@/engines/geometry/shapeToPath'
-import { buildPencilPathD } from '@/engines/geometry/pencilPath'
+import { buildPencilStroke } from '@/engines/geometry/pencilPath'
 import { CanvasGuideOverlay } from '@/components/canvas/CanvasGuideOverlay'
 import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
 import type { CanvasGuideType } from '@/types/canvasGuide'
@@ -684,8 +684,9 @@ export function Canvas() {
 
   const commitPencilStroke = useCallback(
     (raw: Vec2[]) => {
-      const d = buildPencilPathD(raw, pencilSettings.smoothing)
-      if (!d) return
+      const stroke = buildPencilStroke(raw, pencilSettings.smoothing)
+      if (!stroke) return
+      const { d, points } = stroke
       const now = Date.now()
       const last = lastPencilCommitRef.current
       if (last && last.d === d && now - last.at < 250) return
@@ -696,6 +697,14 @@ export function Canvas() {
         type: 'path',
         attrs: {
           d,
+          /**
+           * Storing the anchor list (alongside `d`) makes the freehand stroke
+           * behave like a pen-tool path in the path-edit tool: each anchor and
+           * its cubic handles can be dragged, inserted, or deleted directly,
+           * instead of being a frozen `d` string the user can only retrace.
+           */
+          __pathPoints: points,
+          __pathClosed: false,
           fill: 'none',
           stroke: pencilSettings.color,
           'stroke-width': pencilSettings.strokeWidth,

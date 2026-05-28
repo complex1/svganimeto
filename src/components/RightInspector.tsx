@@ -13,10 +13,18 @@ import {
 } from '@/engines/animation/gsapTrackCompiler'
 import type { AnimationTrack, NoiseDef, NoiseProperty } from '@/types/animation'
 import type { VectorElement } from '@/types/document'
+import type { TextureBrush, TextureBrushPresetId } from '@/types/texture'
 import { NOISE_PROPERTIES } from '@/engines/animation/noise'
 import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
 import type { LinearGradientDef, RadialGradientDef } from '@/types/gradient'
 import { AnimationPresetsModal } from '@/components/AnimationPresetsModal'
+import {
+  defaultTextureBrush,
+  getTextureBrushPreset,
+  sampleTextureStamps,
+  TEXTURE_BRUSH_ELIGIBLE_TYPES,
+  TEXTURE_BRUSH_PRESETS
+} from '@/engines/texture/textureBrushes'
 
 function InspectorHelpIcon({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -36,6 +44,7 @@ type InspectorSectionId =
   | 'transform'
   | 'animation'
   | 'noise'
+  | 'texture'
   | 'symbol'
   | 'geometry'
   | 'appearance'
@@ -49,6 +58,7 @@ const defaultOpenSections: Record<InspectorSectionId, boolean> = {
   transform: true,
   animation: true,
   noise: false,
+  texture: false,
   symbol: true,
   geometry: true,
   appearance: true,
@@ -142,6 +152,7 @@ export function RightInspector() {
   const pushHistory = useEditorStore((s) => s.pushHistory)
   const setElementAttrs = useEditorStore((s) => s.setElementAttrs)
   const setElementNoise = useEditorStore((s) => s.setElementNoise)
+  const setElementTextureBrush = useEditorStore((s) => s.setElementTextureBrush)
   const upsertKeyframe = useEditorStore((s) => s.upsertKeyframe)
   const setTracks = useEditorStore((s) => s.setTracks)
   const duration = useEditorStore((s) => s.duration)
@@ -917,6 +928,34 @@ export function RightInspector() {
             disabled={attrsUiLocked}
           />
         </InspectorCollapsibleSection>
+        {TEXTURE_BRUSH_ELIGIBLE_TYPES.includes(el.type) && (
+          <InspectorCollapsibleSection
+            sectionId="texture"
+            title="Texture brush"
+            expanded={openSections.texture}
+            onToggle={() => toggleSection('texture')}
+            info={
+              <>
+                Treats this path as a guide and lays small stamp shapes along
+                it — pencil, charcoal, brush, marker, crayon, ink, fur or
+                grass. Each stamp rotates with the path tangent and randomises
+                its scale / scatter / opacity, so a curve looks like a real
+                stroke instead of a vector line.
+                <br />
+                <br />
+                Tip: set the host's stroke colour to <code>none</code> to leave
+                only the texture, or keep a stroke for a layered "ink over
+                line" look.
+              </>
+            }
+          >
+            <TextureBrushEditor
+              element={el}
+              onChange={(next) => setElementTextureBrush(el.id, next)}
+              disabled={attrsUiLocked}
+            />
+          </InspectorCollapsibleSection>
+        )}
         {isSymbolInstance ? (
           <InspectorCollapsibleSection
             sectionId="symbol"
@@ -1967,6 +2006,255 @@ function NoiseEditor({
       >
         Add another noise
       </button>
+    </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Texture brush editor                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Tiny SVG preview shown in the preset grid. Renders a single horizontal sweep
+ * through `sampleTextureStamps` so the user can recognise the look before
+ * clicking. Kept self-contained (no Canvas/store dependency) so it can live
+ * directly in the inspector tile grid.
+ */
+function TextureBrushPresetPreview({ preset }: { preset: TextureBrushPresetId }) {
+  const def = getTextureBrushPreset(preset)
+  const stampColor = '#dbe1ee'
+  const previewBrush = useMemo<TextureBrush>(
+    () => ({ preset, seed: 42, ...def.defaults }),
+    [preset, def]
+  )
+  return (
+    <svg width={84} height={28} viewBox="-2 -14 86 28" aria-hidden>
+      <rect x={-2} y={-14} width={86} height={28} fill="#0e1422" />
+      <PresetPreviewSweep brush={previewBrush} color={stampColor} />
+    </svg>
+  )
+}
+
+function PresetPreviewSweep({ brush, color }: { brush: TextureBrush; color: string }) {
+  /**
+   * A straight horizontal guide path keeps the preview comparable across
+   * presets (length, tangent variation, etc.). Looks like an "alphabet swatch".
+   */
+  const guideD = 'M 2 0 L 80 0'
+  const preset = getTextureBrushPreset(brush.preset)
+  const stamps = sampleTextureStamps(guideD, brush)
+  return (
+    <g>
+      {stamps.map((s) => (
+        <g
+          key={s.index}
+          transform={`translate(${s.x.toFixed(3)} ${s.y.toFixed(3)}) rotate(${s.rotation.toFixed(2)}) scale(${s.scale.toFixed(3)})`}
+          opacity={s.alpha}
+        >
+          {preset.stamp.map((shape, j) => (
+            <path key={j} d={shape.d} fill={color} fillRule={shape.fillRule ?? 'nonzero'} stroke="none" />
+          ))}
+        </g>
+      ))}
+    </g>
+  )
+}
+
+function TextureBrushEditor({
+  element,
+  onChange,
+  disabled
+}: {
+  element: VectorElement
+  onChange: (next: TextureBrush | undefined) => void
+  disabled?: boolean
+}) {
+  const brush = element.textureBrush
+
+  const update = (patch: Partial<TextureBrush>) => {
+    if (disabled || !brush) return
+    onChange({ ...brush, ...patch })
+  }
+
+  const choosePreset = (preset: TextureBrushPresetId) => {
+    if (disabled) return
+    /** Switching preset re-seeds with the new defaults; carrying the old jitter
+     * knobs would produce a completely off-character stamp pattern. */
+    onChange(defaultTextureBrush(preset, brush?.seed))
+  }
+
+  /** Single source of truth for the "no brush yet" empty state. */
+  if (!brush) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
+          Drop a texture along this path — pick a preset to begin.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          {TEXTURE_BRUSH_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => choosePreset(p.id)}
+              title={p.description}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'stretch',
+                gap: 4,
+                padding: 6,
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                background: 'transparent',
+                cursor: disabled ? 'default' : 'pointer'
+              }}
+            >
+              <TextureBrushPresetPreview preset={p.id} />
+              <span style={{ fontSize: 11, color: 'var(--text)' }}>{p.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  /**
+   * Helper for the standard "label + slider + numeric box" row. We use the same
+   * `.slider-group` class noise/effects rows use so the inspector keeps a
+   * consistent look.
+   */
+  const slider = (
+    label: string,
+    key: keyof TextureBrush,
+    min: number,
+    max: number,
+    step: number
+  ) => (
+    <label key={key} style={{ display: 'grid', gridTemplateColumns: '78px 1fr', gap: 8, alignItems: 'center', fontSize: 12 }}>
+      <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+      <div className="slider-group">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={Number(brush[key])}
+          disabled={disabled}
+          onChange={(e) => update({ [key]: Number(e.target.value) } as Partial<TextureBrush>)}
+        />
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={Number(brush[key])}
+          disabled={disabled}
+          onChange={(e) => {
+            const v = Number(e.target.value)
+            if (Number.isFinite(v)) update({ [key]: Math.max(min, Math.min(max, v)) } as Partial<TextureBrush>)
+          }}
+        />
+      </div>
+    </label>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div>
+        <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>
+          Preset
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          {TEXTURE_BRUSH_PRESETS.map((p) => {
+            const active = p.id === brush.preset
+            return (
+              <button
+                key={p.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => choosePreset(p.id)}
+                title={p.description}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'stretch',
+                  gap: 4,
+                  padding: 6,
+                  border: active ? '1px solid var(--accent, #5b8def)' : '1px solid var(--border)',
+                  borderRadius: 6,
+                  background: active ? 'rgba(91,141,239,0.10)' : 'transparent',
+                  cursor: disabled ? 'default' : 'pointer'
+                }}
+              >
+                <TextureBrushPresetPreview preset={p.id} />
+                <span style={{ fontSize: 11, color: 'var(--text)' }}>{p.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {slider('Spacing', 'spacing', 0.25, 12, 0.05)}
+      {slider('Scale', 'scale', 0.1, 4, 0.05)}
+      {slider('Scale jitter', 'scaleJitter', 0, 1, 0.05)}
+      {slider('Rotate jitter', 'rotationJitter', 0, 360, 1)}
+      {slider('Scatter', 'scatter', 0, 8, 0.1)}
+      {slider('Opacity', 'opacity', 0, 1, 0.05)}
+      {slider('Alpha jitter', 'opacityJitter', 0, 1, 0.05)}
+
+      <label style={{ display: 'grid', gridTemplateColumns: '78px 1fr', gap: 8, alignItems: 'center', fontSize: 12 }}>
+        <span style={{ color: 'var(--text-muted)' }}>Orient</span>
+        <select
+          value={brush.orient}
+          disabled={disabled}
+          onChange={(e) => update({ orient: e.target.value as TextureBrush['orient'] })}
+        >
+          <option value="tangent">Follow path tangent</option>
+          <option value="upright">Stay upright</option>
+        </select>
+      </label>
+
+      <label style={{ display: 'grid', gridTemplateColumns: '78px 1fr', gap: 8, alignItems: 'center', fontSize: 12 }}>
+        <span style={{ color: 'var(--text-muted)' }}>Color</span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input
+            type="color"
+            value={brush.color ?? '#222831'}
+            disabled={disabled}
+            onChange={(e) => update({ color: e.target.value })}
+          />
+          <button
+            type="button"
+            disabled={disabled || !brush.color}
+            onClick={() => update({ color: undefined })}
+            title="Inherit the host element's stroke / fill"
+            style={{ fontSize: 11, padding: '2px 8px' }}
+          >
+            Inherit
+          </button>
+        </div>
+      </label>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => update({ seed: Math.floor(Math.random() * 1_000_000) })}
+          title="Re-roll the random placement seed"
+          style={{ fontSize: 11 }}
+        >
+          Reshuffle
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(undefined)}
+          style={{ fontSize: 11, color: 'var(--danger, #e5484d)' }}
+        >
+          Remove brush
+        </button>
+      </div>
     </div>
   )
 }

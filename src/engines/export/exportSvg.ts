@@ -11,6 +11,13 @@ import { mergeAttrsFromTracks } from '@/engines/animation/attrAnimation'
 import { applyMotionPathToTransform } from '@/engines/animation/motionPathApply'
 import { flattenTimesForElement } from '@/engines/export/keyframeCss'
 import { cloneSymbolTemplateForInstance } from '@/engines/document/symbolClone'
+import {
+  extractGuidePathD,
+  getTextureBrushPreset,
+  resolveStampColor,
+  sampleTextureStamps,
+  TEXTURE_BRUSH_ELIGIBLE_TYPES
+} from '@/engines/texture/textureBrushes'
 
 function allElements(roots: VectorElement[]): VectorElement[] {
   const out: VectorElement[] = []
@@ -88,6 +95,42 @@ function stripFilterForInner(attrs: Record<string, string | number>): Record<str
   return rest
 }
 
+/**
+ * Bake a textured-stroke into a static SVG fragment. Because exported SVGs are
+ * pure declarative graphics (no runtime JS), we sample the stamps once against
+ * the element's `d` at the chosen `timeSec` and emit them as concrete paths.
+ * The fragment is meant to be placed inside the host element's outer `<g>` so
+ * the element transform / motion path still drives the stamps.
+ */
+function renderTextureBrushSvg(
+  el: VectorElement,
+  mergedAttrs: Record<string, unknown>
+): string {
+  const brush = el.textureBrush
+  if (!brush) return ''
+  if (!TEXTURE_BRUSH_ELIGIBLE_TYPES.includes(el.type)) return ''
+  const guideD = extractGuidePathD(el.type, mergedAttrs)
+  if (!guideD) return ''
+  const stamps = sampleTextureStamps(guideD, brush)
+  if (stamps.length === 0) return ''
+  const preset = getTextureBrushPreset(brush.preset)
+  const color = resolveStampColor(brush, mergedAttrs)
+  const stampNodes = stamps
+    .map((s) => {
+      const inner = preset.stamp
+        .map(
+          (sh) =>
+            `<path d="${escapeXml(sh.d)}" fill="${escapeXml(color)}" fill-rule="${sh.fillRule ?? 'nonzero'}" stroke="none"/>`
+        )
+        .join('')
+      const t = `translate(${s.x.toFixed(3)} ${s.y.toFixed(3)}) rotate(${s.rotation.toFixed(2)}) scale(${s.scale.toFixed(3)})`
+      const op = s.alpha < 1 ? ` opacity="${s.alpha.toFixed(3)}"` : ''
+      return `<g transform="${escapeXml(t)}"${op}>${inner}</g>`
+    })
+    .join('')
+  return `<g data-texture-brush="${escapeXml(brush.preset)}" pointer-events="none">${stampNodes}</g>`
+}
+
 function attrsWithoutSvgFilterUrl(attrs: Record<string, unknown>): Record<string, unknown> {
   const rest = { ...attrs }
   delete rest.filter
@@ -144,7 +187,14 @@ function renderInner(
   }
   const tag =
     el.type === 'polygon' ? 'polygon' : el.type === 'polyline' ? 'polyline' : el.type
-  return `<${tag}${idAttr} ${attrsToString(merged)} />`
+  const baseShape = `<${tag}${idAttr} ${attrsToString(merged)} />`
+  /**
+   * Textured strokes are baked at the export time-sample so the output stays
+   * pure SVG. Animation that mutates `d` after t=0 won't re-stamp on its own
+   * (would require runtime JS or per-frame baking); document that limitation
+   * if/when it becomes a real issue for users.
+   */
+  return baseShape + renderTextureBrushSvg(el, mergedRaw as Record<string, unknown>)
 }
 
 function renderElement(
@@ -281,12 +331,12 @@ export function exportStillFrameSvg(project: Project, tracks: AnimationTrack[], 
       const inner = typeof __textContent === 'string' ? __textContent : ''
       return `<text id="${escapeXml(paintTargetId(el))}" ${attrsToString(rest)}>${escapeXml(inner)}</text>`
     }
-    const mergedA = stripFilterForInner(
-      mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, string | number>
-    )
+    const mergedRawA = mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, string | number>
+    const mergedA = stripFilterForInner(mergedRawA)
     const tag =
       el.type === 'polygon' ? 'polygon' : el.type === 'polyline' ? 'polyline' : el.type
-    return `<${tag} id="${escapeXml(paintTargetId(el))}" ${attrsToString(mergedA)} />`
+    const baseShape = `<${tag} id="${escapeXml(paintTargetId(el))}" ${attrsToString(mergedA)} />`
+    return baseShape + renderTextureBrushSvg(el, mergedRawA as Record<string, unknown>)
   }
 
   function renderElementAtTime(el: VectorElement): string {

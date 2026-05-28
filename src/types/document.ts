@@ -63,6 +63,13 @@ export type VectorElement = {
    * Applied on top of the merged track value — does not mutate base / keyframes.
    */
   noise?: import('./animation').NoiseDef[]
+  /**
+   * Optional textured stroke. When present, the path/polyline geometry is used as a
+   * GUIDE: small stamp shapes are repeatedly drawn along its length, oriented to
+   * the path tangent (or upright, per preset). Unlike `<pattern>` fills, stamps
+   * naturally rotate and follow the curve.
+   */
+  textureBrush?: import('./texture').TextureBrush
 }
 
 export type Asset = {

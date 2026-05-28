@@ -246,6 +246,15 @@ type EditorState = {
   setElementName: (id: string, name: string, opts?: { skipHistory?: boolean }) => void
   /** Replace the noise (wiggle) effects on a single element. Pushes history. */
   setElementNoise: (id: string, noise: NoiseDef[], opts?: { skipHistory?: boolean }) => void
+  /**
+   * Replace the texture brush config on a single element. Passing `undefined`
+   * removes the brush entirely (back to a plain stroke). Pushes history.
+   */
+  setElementTextureBrush: (
+    id: string,
+    brush: import('@/types/texture').TextureBrush | undefined,
+    opts?: { skipHistory?: boolean }
+  ) => void
   setElementAttrs: (
     id: string,
     attrs: Record<string, VectorAttrValue>,
@@ -977,6 +986,20 @@ export const useEditorStore = create<EditorState>((set, get) => {
             elements: updateElementById(s.project.elements, id, (el) => ({
               ...el,
               noise: noise.length > 0 ? noise : undefined
+            }))
+          }
+        }),
+        opts
+      ),
+
+    setElementTextureBrush: (id, brush, opts) =>
+      withHistory(
+        (s) => ({
+          project: {
+            ...s.project,
+            elements: updateElementById(s.project.elements, id, (el) => ({
+              ...el,
+              textureBrush: brush
             }))
           }
         }),
