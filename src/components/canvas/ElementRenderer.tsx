@@ -2,6 +2,7 @@ import type { SVGProps } from 'react'
 import type { AnimationTrack } from '@/types/animation'
 import type { SymbolDefinition, VectorElement } from '@/types/document'
 import { applyMotionPathToTransform } from '@/engines/animation/motionPathApply'
+import { applyNoiseToTransform } from '@/engines/animation/noise'
 import {
   sampleMergedAttrsForElement,
   sampleMergedTransformForElement
@@ -197,9 +198,11 @@ function El({
     : animateView
       ? timelineTracks
       : tracks
-  const tr0 = shouldSample
+  const trMerged = shouldSample
     ? sampleMergedTransformForElement(el, rootElements, tracksForSample, timeSec, gsapDriver)
     : el.transform
+  /** Wiggle layered on top of keyframe-merged transform — only while sampling. */
+  const tr0 = shouldSample ? applyNoiseToTransform(trMerged, el.noise, timeSec) : trMerged
   const tr = applyMotionPathToTransform(tr0, el, rootElements, tracksForSample, timeSec)
   const editorTransform = transformToSvgString(tr)
   const mergedAttrs = (

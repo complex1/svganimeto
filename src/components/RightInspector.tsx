@@ -11,8 +11,9 @@ import {
   sampleMergedAttrsForElement,
   sampleMergedTransformForElement
 } from '@/engines/animation/gsapTrackCompiler'
-import type { AnimationTrack } from '@/types/animation'
+import type { AnimationTrack, NoiseDef, NoiseProperty } from '@/types/animation'
 import type { VectorElement } from '@/types/document'
+import { NOISE_PROPERTIES } from '@/engines/animation/noise'
 import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
 import type { LinearGradientDef, RadialGradientDef } from '@/types/gradient'
 import { AnimationPresetsModal } from '@/components/AnimationPresetsModal'
@@ -34,6 +35,7 @@ type InspectorSectionId =
   | 'layer'
   | 'transform'
   | 'animation'
+  | 'noise'
   | 'symbol'
   | 'geometry'
   | 'appearance'
@@ -46,6 +48,7 @@ const defaultOpenSections: Record<InspectorSectionId, boolean> = {
   layer: true,
   transform: true,
   animation: true,
+  noise: false,
   symbol: true,
   geometry: true,
   appearance: true,
@@ -138,6 +141,7 @@ export function RightInspector() {
   const updateTransform = useEditorStore((s) => s.updateTransform)
   const pushHistory = useEditorStore((s) => s.pushHistory)
   const setElementAttrs = useEditorStore((s) => s.setElementAttrs)
+  const setElementNoise = useEditorStore((s) => s.setElementNoise)
   const upsertKeyframe = useEditorStore((s) => s.upsertKeyframe)
   const setTracks = useEditorStore((s) => s.setTracks)
   const duration = useEditorStore((s) => s.duration)
@@ -888,6 +892,31 @@ export function RightInspector() {
             })()}
           </InspectorCollapsibleSection>
         ) : null}
+        <InspectorCollapsibleSection
+          sectionId="noise"
+          title="Noise"
+          expanded={openSections.noise}
+          onToggle={() => toggleSection('noise')}
+          info={
+            <>
+              Adds smooth pseudo-random "wiggle" to a transform property while the
+              playhead is inside the noise window. Layered on top of any keyframes,
+              so use it to add organic jitter, idle motion, camera shake, etc.
+              <br />
+              <br />
+              Each entry has a property, a time range (from / to in seconds), a
+              value range (min / max) the wobble oscillates between, and a
+              frequency in Hz.
+            </>
+          }
+        >
+          <NoiseEditor
+            element={el}
+            projectDuration={duration}
+            onChange={(next) => setElementNoise(el.id, next)}
+            disabled={attrsUiLocked}
+          />
+        </InspectorCollapsibleSection>
         {isSymbolInstance ? (
           <InspectorCollapsibleSection
             sectionId="symbol"
@@ -1693,5 +1722,251 @@ export function RightInspector() {
       </div>
       <AnimationPresetsModal open={presetsOpen} onClose={() => setPresetsOpen(false)} />
     </aside>
+  )
+}
+
+/**
+ * Editor for the per-element noise (wiggle) effects. Each entry is editable in
+ * place; the parent owns the array via `onChange` so undo/redo plays nicely with
+ * the store's history.
+ */
+function NoiseEditor({
+  element,
+  projectDuration,
+  onChange,
+  disabled
+}: {
+  element: VectorElement
+  projectDuration: number
+  onChange: (next: NoiseDef[]) => void
+  disabled?: boolean
+}) {
+  const noises = element.noise ?? []
+
+  const defaultsForProperty = (
+    property: NoiseProperty,
+    base: VectorElement
+  ): { min: number; max: number } => {
+    /** Sensible ranges so the first preview is visibly noisy without being absurd. */
+    const cur = (base.transform as unknown as Record<string, number>)[property] ?? 0
+    switch (property) {
+      case 'x':
+      case 'y':
+        return { min: cur - 10, max: cur + 10 }
+      case 'rotation':
+      case 'skewX':
+      case 'skewY':
+        return { min: cur - 15, max: cur + 15 }
+      case 'scaleX':
+      case 'scaleY':
+        return { min: Math.max(0.01, cur * 0.9), max: cur * 1.1 }
+      case 'opacity':
+        return { min: 0.4, max: 1 }
+      default:
+        return { min: cur - 5, max: cur + 5 }
+    }
+  }
+
+  const addNoise = () => {
+    if (disabled) return
+    const property: NoiseProperty = 'rotation'
+    const range = defaultsForProperty(property, element)
+    const next: NoiseDef = {
+      id: nanoid(8),
+      property,
+      from: 0,
+      to: Math.max(1, projectDuration),
+      min: range.min,
+      max: range.max,
+      frequency: 3
+    }
+    onChange([...noises, next])
+  }
+
+  const updateNoise = (id: string, patch: Partial<NoiseDef>) => {
+    if (disabled) return
+    onChange(
+      noises.map((n) =>
+        n.id === id
+          ? ({
+              ...n,
+              ...patch,
+              /** Property change → reset min/max to property-appropriate defaults so old numbers don't surprise. */
+              ...(patch.property && patch.property !== n.property
+                ? defaultsForProperty(patch.property, element)
+                : {})
+            } as NoiseDef)
+          : n
+      )
+    )
+  }
+
+  const removeNoise = (id: string) => {
+    if (disabled) return
+    onChange(noises.filter((n) => n.id !== id))
+  }
+
+  if (noises.length === 0) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
+          No noise effects yet. Add one to make a property wobble between two values
+          over a time window.
+        </p>
+        <button
+          type="button"
+          className="primary"
+          disabled={disabled}
+          onClick={addNoise}
+        >
+          Add noise effect
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {noises.map((n, idx) => (
+        <div
+          key={n.id}
+          style={{
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            padding: 8,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <strong style={{ fontSize: 12 }}>Noise {idx + 1}</strong>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => removeNoise(n.id)}
+              style={{
+                marginLeft: 'auto',
+                fontSize: 11,
+                padding: '2px 8px',
+                color: 'var(--danger, #e5484d)'
+              }}
+            >
+              Remove
+            </button>
+          </div>
+
+          <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', fontSize: 12 }}>
+            <span style={{ color: 'var(--text-muted)' }}>Property</span>
+            <select
+              value={n.property}
+              disabled={disabled}
+              onChange={(e) => updateNoise(n.id, { property: e.target.value as NoiseProperty })}
+            >
+              {NOISE_PROPERTIES.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', fontSize: 11, color: 'var(--text-muted)' }}>
+              <span>From (s)</span>
+              <input
+                type="number"
+                step={0.1}
+                min={0}
+                max={n.to}
+                value={n.from}
+                disabled={disabled}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  if (Number.isFinite(v)) updateNoise(n.id, { from: Math.max(0, Math.min(n.to, v)) })
+                }}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', fontSize: 11, color: 'var(--text-muted)' }}>
+              <span>To (s)</span>
+              <input
+                type="number"
+                step={0.1}
+                min={n.from}
+                value={n.to}
+                disabled={disabled}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  if (Number.isFinite(v)) updateNoise(n.id, { to: Math.max(n.from, v) })
+                }}
+              />
+            </label>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', fontSize: 11, color: 'var(--text-muted)' }}>
+              <span>Min value</span>
+              <input
+                type="number"
+                step={0.1}
+                value={n.min}
+                disabled={disabled}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  if (Number.isFinite(v)) updateNoise(n.id, { min: v })
+                }}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', fontSize: 11, color: 'var(--text-muted)' }}>
+              <span>Max value</span>
+              <input
+                type="number"
+                step={0.1}
+                value={n.max}
+                disabled={disabled}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  if (Number.isFinite(v)) updateNoise(n.id, { max: v })
+                }}
+              />
+            </label>
+          </div>
+
+          <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', fontSize: 12 }}>
+            <span style={{ color: 'var(--text-muted)' }}>Speed (Hz)</span>
+            <div className="slider-group">
+              <input
+                type="range"
+                min={0.1}
+                max={20}
+                step={0.1}
+                value={n.frequency}
+                disabled={disabled}
+                onChange={(e) => updateNoise(n.id, { frequency: Number(e.target.value) })}
+              />
+              <input
+                type="number"
+                min={0.1}
+                max={20}
+                step={0.1}
+                value={n.frequency}
+                disabled={disabled}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  if (Number.isFinite(v)) updateNoise(n.id, { frequency: Math.max(0.1, Math.min(20, v)) })
+                }}
+              />
+            </div>
+          </label>
+        </div>
+      ))}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={addNoise}
+      >
+        Add another noise
+      </button>
+    </div>
   )
 }

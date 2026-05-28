@@ -72,3 +72,35 @@ export type AnimationTrack = {
   property: AnimatableProperty
   keyframes: Keyframe[]
 }
+
+/**
+ * Properties that the noise (wiggle) effect can drive. Restricted to transform
+ * channels — colour / path noise is out of scope.
+ */
+export type NoiseProperty =
+  | 'x'
+  | 'y'
+  | 'scaleX'
+  | 'scaleY'
+  | 'rotation'
+  | 'opacity'
+  | 'skewX'
+  | 'skewY'
+
+/**
+ * Render-time wiggle effect attached to a single VectorElement property. While
+ * the playhead is inside `[from, to]`, the property's value is replaced with a
+ * smooth pseudo-random oscillation between `min` and `max` at `frequency` Hz.
+ * Stored on the element itself (not as a track) so it composes on top of
+ * keyframed animation without polluting the timeline.
+ */
+export type NoiseDef = {
+  id: string
+  property: NoiseProperty
+  from: number
+  to: number
+  min: number
+  max: number
+  frequency: number
+  seed?: number
+}

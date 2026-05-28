@@ -57,6 +57,12 @@ export type VectorElement = {
   children?: VectorElement[]
   locked?: boolean
   visible?: boolean
+  /**
+   * Optional render-time noise effects (wiggle). Each entry adds a smooth random
+   * variation to a single transform property between `from` and `to` seconds.
+   * Applied on top of the merged track value — does not mutate base / keyframes.
+   */
+  noise?: import('./animation').NoiseDef[]
 }
 
 export type Asset = {

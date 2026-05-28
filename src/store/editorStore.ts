@@ -15,7 +15,8 @@ import type {
   EasingId,
   Keyframe,
   KeyframeClipboardEntry,
-  KeyframeSelectionEntry
+  KeyframeSelectionEntry,
+  NoiseDef
 } from '@/types/animation'
 import { mergeTransformFromTracks, sampleTrack } from '@/engines/animation/interpolate'
 import {
@@ -241,6 +242,8 @@ type EditorState = {
 
   updateTransform: (id: string, partial: Partial<Transform>, opts?: { skipHistory?: boolean }) => void
   setElementName: (id: string, name: string, opts?: { skipHistory?: boolean }) => void
+  /** Replace the noise (wiggle) effects on a single element. Pushes history. */
+  setElementNoise: (id: string, noise: NoiseDef[], opts?: { skipHistory?: boolean }) => void
   setElementAttrs: (
     id: string,
     attrs: Record<string, VectorAttrValue>,
@@ -909,6 +912,20 @@ export const useEditorStore = create<EditorState>((set, get) => {
           project: {
             ...s.project,
             elements: updateElementById(s.project.elements, id, (el) => ({ ...el, name }))
+          }
+        }),
+        opts
+      ),
+
+    setElementNoise: (id, noise, opts) =>
+      withHistory(
+        (s) => ({
+          project: {
+            ...s.project,
+            elements: updateElementById(s.project.elements, id, (el) => ({
+              ...el,
+              noise: noise.length > 0 ? noise : undefined
+            }))
           }
         }),
         opts
