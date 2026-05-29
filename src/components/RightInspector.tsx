@@ -11,6 +11,7 @@ import {
   sampleMergedAttrsForElement,
   sampleMergedTransformForElement
 } from '@/engines/animation/gsapTrackCompiler'
+import { getLocalShapeCenter } from '@/engines/geometry/localShapeBounds'
 import type { AnimationTrack, NoiseDef, NoiseProperty } from '@/types/animation'
 import type { VectorElement } from '@/types/document'
 import type { TextureBrush, TextureBrushPresetId } from '@/types/texture'
@@ -673,12 +674,7 @@ export function RightInspector() {
                   const nextId = e.target.value || ''
                   const prevId =
                     typeof el.attrs.__motionPathId === 'string' ? el.attrs.__motionPathId : ''
-                  /**
-                   * Motion path applies as a translation on top of the layer's x/y.
-                   * Adjust x/y so the visual position stays put when the path is
-                   * attached, swapped, or removed — otherwise the element jumps
-                   * to (anchorX + tr.x, anchorY + tr.y) on assignment.
-                   */
+                  if (prevId === nextId) return
                   const flat = flattenForLayers(elements)
                   const getAnchor = (pathId: string): { x: number; y: number } | null => {
                     if (!pathId) return null
@@ -698,16 +694,59 @@ export function RightInspector() {
                       return null
                     }
                   }
-                  const prevAnchor = getAnchor(prevId) ?? { x: 0, y: 0 }
-                  const nextAnchor = getAnchor(nextId) ?? { x: 0, y: 0 }
-                  const dx = prevAnchor.x - nextAnchor.x
-                  const dy = prevAnchor.y - nextAnchor.y
+                  /**
+                   * Motion path translates a layer by treating `(tr.x, tr.y)` as a
+                   * USER offset from the path anchor (see motionPathApply.ts), so
+                   * the three transitions below need different bookkeeping:
+                   *
+                   *   1. none → path  Clear `(tr.x, tr.y)` so the element snaps to
+                   *      the path start. This also wipes any pivot-preserving
+                   *      compensation that `updateTransform` may have baked into
+                   *      x/y from earlier rotation/scale changes — otherwise that
+                   *      compensation would be treated as user-nudge and yank the
+                   *      element off-canvas (the rotated-rect bug).
+                   *   2. path → path  Preserve the current visual position by
+                   *      shifting `(tr.x, tr.y)` by `(prevAnchor − nextAnchor)`.
+                   *   3. path → none  Promote the anchor-relative offset back to
+                   *      absolute coordinates so the element stays where it last
+                   *      rendered, instead of teleporting to (0, 0).
+                   */
                   setElementAttrs(el.id, { __motionPathId: nextId })
-                  if (dx !== 0 || dy !== 0) {
-                    updateTransform(
-                      el.id,
-                      { x: el.transform.x + dx, y: el.transform.y + dy }
-                    )
+                  if (!prevId && nextId) {
+                    updateTransform(el.id, { x: 0, y: 0 })
+                  } else if (prevId && nextId) {
+                    const prevAnchor = getAnchor(prevId) ?? { x: 0, y: 0 }
+                    const nextAnchor = getAnchor(nextId) ?? { x: 0, y: 0 }
+                    updateTransform(el.id, {
+                      x: tr.x + (prevAnchor.x - nextAnchor.x),
+                      y: tr.y + (prevAnchor.y - nextAnchor.y)
+                    })
+                  } else if (prevId && !nextId) {
+                    /**
+                     * Detach: convert anchor-relative offset to absolute world
+                     * coords. We also subtract the rotation/scale-induced shift
+                     * of the local-bbox centre from the local origin so the
+                     * element doesn't visibly jump by that vector when the path
+                     * is removed (motion-path mode pivots about the centre,
+                     * pathless mode renders from the local origin).
+                     */
+                    const prevAnchor = getAnchor(prevId) ?? { x: 0, y: 0 }
+                    const center = getLocalShapeCenter(el)
+                    let dxFromOrigin = 0
+                    let dyFromOrigin = 0
+                    if (center) {
+                      const rad = (tr.rotation * Math.PI) / 180
+                      const cosR = Math.cos(rad)
+                      const sinR = Math.sin(rad)
+                      const cxs = center.x * tr.scaleX
+                      const cys = center.y * tr.scaleY
+                      dxFromOrigin = cxs * cosR - cys * sinR
+                      dyFromOrigin = cxs * sinR + cys * cosR
+                    }
+                    updateTransform(el.id, {
+                      x: tr.x + prevAnchor.x - dxFromOrigin,
+                      y: tr.y + prevAnchor.y - dyFromOrigin
+                    })
                   }
                 }}
                 style={{ maxWidth: '100%' }}
