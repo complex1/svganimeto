@@ -31,6 +31,14 @@ export default defineConfig({
         input: resolve(__dirname, 'index.html')
       }
     },
+    /**
+     * `es` format is required so workers can use dynamic `import()` for
+     * lazy-loaded WASM (potrace, etc.). Modern Electron / Chromium fully
+     * supports ES module workers, so there's no compatibility cost.
+     */
+    worker: {
+      format: 'es'
+    },
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src')

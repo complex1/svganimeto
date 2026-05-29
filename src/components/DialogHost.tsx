@@ -43,6 +43,14 @@ function PromptBody({
         }}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
+          /**
+           * The dialog floats over the editor canvas, so any keystroke that
+           * bubbles out hits the editor's global shortcut handler. We stop
+           * propagation universally and still handle Enter ourselves to
+           * submit. Without this, typing things like "z" with Cmd held would
+           * undo the underlying document while the dialog is open.
+           */
+          e.stopPropagation()
           if (e.key === 'Enter') {
             e.preventDefault()
             submit()

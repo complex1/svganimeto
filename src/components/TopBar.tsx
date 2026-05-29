@@ -130,7 +130,16 @@ export function TopBar() {
           spellCheck={false}
           onChange={(e) => setDraftProjectName(e.target.value)}
           onBlur={commitProjectName}
-          onKeyDown={onProjectNameKeyDown}
+          onKeyDown={(e) => {
+            /**
+             * Stop the keystroke from bubbling out to the editor's global
+             * shortcuts. Without this, typing letters like "z" or "v"
+             * (especially while holding Cmd/Ctrl) could trigger undo, tool
+             * switches, or playback toggles instead of just editing the name.
+             */
+            e.stopPropagation()
+            onProjectNameKeyDown(e)
+          }}
         />
       ) : (
         <Tooltip content="Double-click to rename project">

@@ -77,6 +77,11 @@ Output installers land under `release/` when using `dist`.
 - **Zustand** for editor and session state
 - **GSAP** for optional dev compilation paths and playback-related logic
 - **polygon-clipping**, custom geometry helpers for booleans, eraser, and fills
+- **WebAssembly back-ends** with JS fallbacks for the three heaviest hot paths:
+  - `@resvg/resvg-wasm` — preview frame bake + GIF / video frame rasterization
+  - `js-angusj-clipper` (Clipper2) — shape builder, eraser, motion-path booleans
+  - `esm-potrace-wasm` — bitmap → SVG tracing in the import worker
+  - Every WASM module loads lazily on first use and falls back to the original JS engine if the runtime cannot host it. See `src/wasm/` and [Architecture — WebAssembly engines](docs/architecture-and-modules.md#webassembly-engines-srcwasm).
 
 ## Security (Electron)
 

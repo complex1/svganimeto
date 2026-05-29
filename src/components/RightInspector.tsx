@@ -495,7 +495,6 @@ export function RightInspector() {
   }
 
   const motionPathActive =
-    !isSymbolInstance &&
     typeof el.attrs.__motionPathId === 'string' &&
     el.attrs.__motionPathId.trim() !== ''
 
@@ -619,7 +618,7 @@ export function RightInspector() {
         >
           {activeTransformKeys.map((key) => row(transformLabel[key], key))}
         </InspectorCollapsibleSection>
-        {!isSymbolInstance ? (
+        {(
           <InspectorCollapsibleSection
             sectionId="animation"
             title="Animation"
@@ -633,6 +632,15 @@ export function RightInspector() {
               <>
                 Motion path and path morph controls. Offset keyframes require{' '}
                 <strong>Animate</strong> or <strong>Preview</strong> mode.
+                {isSymbolInstance && (
+                  <>
+                    <br />
+                    <br />
+                    For symbol instances the motion path drives the whole instance on the main
+                    canvas. The symbol's own internal animation (set on the symbol master) still
+                    plays inside the instance.
+                  </>
+                )}
               </>
             }
           >
@@ -902,7 +910,7 @@ export function RightInspector() {
               )
             })()}
           </InspectorCollapsibleSection>
-        ) : null}
+        )}
         <InspectorCollapsibleSection
           sectionId="noise"
           title="Noise"

@@ -1,6 +1,7 @@
 import {
   cloneElement,
   isValidElement,
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -21,9 +22,23 @@ export type TooltipProps = {
   side?: TooltipSide
   anchorClassName?: string
   anchorStyle?: CSSProperties
+  /**
+   * Milliseconds to wait after hover/focus before the tooltip appears.
+   * Defaults to {@link DEFAULT_OPEN_DELAY_MS} (1 s) so casual cursor sweeps
+   * across the toolbar / inspector don't trigger a flurry of bubbles.
+   */
+  openDelayMs?: number
 }
 
 const GAP = 8
+
+/**
+ * 1 second feels like a "considered hover" — long enough to skip when a user
+ * is just glancing across the UI, short enough that intentional reads still
+ * feel responsive. The user explicitly requested this behaviour as part of
+ * tightening the editor chrome.
+ */
+const DEFAULT_OPEN_DELAY_MS = 1000
 
 function mergeHandlers<T extends MouseEvent | FocusEvent>(
   ours: (event: T) => void,
@@ -47,7 +62,8 @@ export function Tooltip({
   children,
   side = 'top',
   anchorClassName,
-  anchorStyle
+  anchorStyle,
+  openDelayMs = DEFAULT_OPEN_DELAY_MS
 }: TooltipProps) {
   if (!isValidElement(children) || !hasTooltipContent(content)) {
     return children
@@ -62,6 +78,21 @@ export function Tooltip({
     left: -9999,
     visibility: 'hidden'
   })
+  /**
+   * Holds the pending `setTimeout` id while we wait out the open delay. We
+   * clear it on hide / unmount so a quick mouse-over → mouse-out never opens
+   * a stranded bubble after the cursor has already left.
+   */
+  const openTimerRef = useRef<number | null>(null)
+  const clearOpenTimer = () => {
+    if (openTimerRef.current != null) {
+      window.clearTimeout(openTimerRef.current)
+      openTimerRef.current = null
+    }
+  }
+  useEffect(() => {
+    return () => clearOpenTimer()
+  }, [])
 
   useLayoutEffect(() => {
     if (!open) return
@@ -105,8 +136,24 @@ export function Tooltip({
     }
   }, [open, side, content])
 
-  const show = () => setOpen(true)
+  const show = () => {
+    clearOpenTimer()
+    if (openDelayMs <= 0) {
+      setOpen(true)
+      return
+    }
+    /**
+     * Delay opening so brief cursor sweeps don't trigger a bubble. Re-entry
+     * (e.g. moving from anchor to its child) resets the timer rather than
+     * stacking them — see `clearOpenTimer` at the top of `show`.
+     */
+    openTimerRef.current = window.setTimeout(() => {
+      openTimerRef.current = null
+      setOpen(true)
+    }, openDelayMs)
+  }
   const hide = () => {
+    clearOpenTimer()
     setOpen(false)
     setBubbleStyle({ top: -9999, left: -9999, visibility: 'hidden' })
   }

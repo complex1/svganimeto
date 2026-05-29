@@ -2,11 +2,11 @@ import clsx from 'clsx'
 import { useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
-  faClone,
   faCube,
   faPen,
   faPenToSquare,
   faPlus,
+  faStamp,
   faTrashCan
 } from '@fortawesome/free-solid-svg-icons'
 import { Tooltip } from '@/components/Tooltip'
@@ -86,7 +86,7 @@ export function SymbolsPanel() {
             <span style={{ flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {sym.name}
             </span>
-            <Tooltip content={symbolEditing ? 'Finish symbol editing first' : 'Place instance'}>
+            <Tooltip content={symbolEditing ? 'Finish symbol editing first' : 'Place instance on canvas'}>
             <button
               type="button"
               disabled={symbolEditing}
@@ -105,7 +105,12 @@ export function SymbolsPanel() {
                 placeSymbolInstance(sym.id)
               }}
             >
-              <FontAwesomeIcon icon={faClone} />
+              {/*
+               * Stamp icon reads as "place / drop this onto the canvas",
+               * whereas the previous `faClone` looked like the layer-panel
+               * Duplicate button and confused new users.
+               */}
+              <FontAwesomeIcon icon={faStamp} />
             </button>
             </Tooltip>
             <Tooltip content={symbolEditing ? 'Finish symbol editing first' : 'Edit symbol master on isolated canvas'}>

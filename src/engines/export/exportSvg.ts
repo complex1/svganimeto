@@ -174,7 +174,16 @@ function renderInner(
     const def = project.symbols.find((s) => s.id === sid)
     if (!def) return ''
     const clone = cloneSymbolTemplateForInstance(def.template, el.id)
-    return renderInner(clone, project, tracks, timeSec)
+    /**
+     * Same scope-switch as in `exportStillFrameSvg`: feed the symbol's own
+     * tracks + clock to the cloned subtree so the symbol's internal animation
+     * is baked into the first frame of any animated-SVG/HTML export.
+     * (Full per-frame CSS keyframes for symbol internals is a larger lift —
+     * tracked in the architecture doc; this at least ensures the static
+     * baseline matches the editor.)
+     */
+    const scope = symbolScopeForInstance(el, timeSec, tracks ?? [], project.symbols)
+    return renderInner(clone, project, scope.tracks, scope.timeSec)
   }
   if (el.type === 'group') {
     const kids = (el.children ?? []).map((c) => renderElement(c, project, tracks, timeSec)).join('')
@@ -306,32 +315,85 @@ function buildKeyframesCss(
   return rules.join('\n\n')
 }
 
+/**
+ * Resolve the time + tracks to use when entering a symbol instance.
+ *
+ * Mirrors the live `ElementRenderer.tsx` semantics: if the symbol has its own
+ * animation clip, we remap its tracks so their `elementId`s match the cloned
+ * subtree ids (`${instanceId}_sym_${templateId}`) and run that clip on its own
+ * loop, otherwise we keep the outer scope so nothing changes. Centralising
+ * this here means GIF / video / Resvg-backed preview all stay in sync with
+ * what users see in the editor.
+ */
+function symbolScopeForInstance(
+  instance: VectorElement,
+  outerTime: number,
+  outerTracks: AnimationTrack[],
+  symbols: Project['symbols']
+): { tracks: AnimationTrack[]; timeSec: number } {
+  const sid = String(instance.attrs.__symbolId ?? '')
+  const def = symbols.find((s) => s.id === sid)
+  const anim = def?.animation
+  if (!anim || anim.tracks.length === 0 || anim.duration <= 0) {
+    return { tracks: outerTracks, timeSec: outerTime }
+  }
+  const prefix = `${instance.id}_sym_`
+  const remapped: AnimationTrack[] = anim.tracks.map((t) => ({
+    ...t,
+    elementId: `${prefix}${t.elementId}`
+  }))
+  const loopOn = anim.loop !== false
+  const symTime = loopOn
+    ? ((outerTime % anim.duration) + anim.duration) % anim.duration
+    : Math.max(0, Math.min(anim.duration, outerTime))
+  return { tracks: remapped, timeSec: symTime }
+}
+
 /** Single frame SVG (no CSS animation); transforms sampled at `timeSec`. */
 export function exportStillFrameSvg(project: Project, tracks: AnimationTrack[], timeSec: number): string {
-  function renderInnerAtTime(el: VectorElement): string {
+  /**
+   * `tracksOverride` / `timeOverride` propagate the active symbol scope down
+   * through `renderInnerAtTime` → `renderElementAtTime`. Top-level callers
+   * pass nothing; the symbol-instance branch swaps in the symbol's own clock
+   * before recursing into the clone.
+   */
+  function renderInnerAtTime(
+    el: VectorElement,
+    tracksOverride?: AnimationTrack[],
+    timeOverride?: number
+  ): string {
+    const effTracks = tracksOverride ?? tracks
+    const effTime = timeOverride ?? timeSec
     if (el.type === 'symbolInstance') {
       const sid = String(el.attrs.__symbolId ?? '')
       const def = project.symbols.find((s) => s.id === sid)
       if (!def) return ''
       const clone = cloneSymbolTemplateForInstance(def.template, el.id)
-      return renderInnerAtTime(clone)
+      /**
+       * Switch to the symbol's own clock + remapped tracks if it has them.
+       * From here on the recursion samples the cloned subtree against those.
+       */
+      const scope = symbolScopeForInstance(el, effTime, effTracks, project.symbols)
+      return renderInnerAtTime(clone, scope.tracks, scope.timeSec)
     }
     if (el.type === 'group') {
       const merged = stripFilterForInner(
-        mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, string | number>
+        mergeAttrsFromTracks(el.attrs, el.id, effTracks, effTime) as Record<string, string | number>
       )
-      const kids = (el.children ?? []).map((c) => renderElementAtTime(c)).join('')
+      const kids = (el.children ?? [])
+        .map((c) => renderElementAtTime(c, effTracks, effTime))
+        .join('')
       return `<g id="${escapeXml(paintTargetId(el))}" ${attrsToString(merged)}>${kids}</g>`
     }
     if (el.type === 'text') {
       const merged = stripFilterForInner(
-        mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, string | number>
+        mergeAttrsFromTracks(el.attrs, el.id, effTracks, effTime) as Record<string, string | number>
       )
       const { __textContent, ...rest } = merged
       const inner = typeof __textContent === 'string' ? __textContent : ''
       return `<text id="${escapeXml(paintTargetId(el))}" ${attrsToString(rest)}>${escapeXml(inner)}</text>`
     }
-    const mergedRawA = mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, string | number>
+    const mergedRawA = mergeAttrsFromTracks(el.attrs, el.id, effTracks, effTime) as Record<string, string | number>
     const mergedA = stripFilterForInner(mergedRawA)
     const tag =
       el.type === 'polygon' ? 'polygon' : el.type === 'polyline' ? 'polyline' : el.type
@@ -339,15 +401,27 @@ export function exportStillFrameSvg(project: Project, tracks: AnimationTrack[], 
     return baseShape + renderTextureBrushSvg(el, mergedRawA as Record<string, unknown>)
   }
 
-  function renderElementAtTime(el: VectorElement): string {
-    let merged = mergeTransformFromTracks(el.transform, el.id, tracks, timeSec)
-    merged = applyMotionPathToTransform(merged, el, project.elements, tracks, timeSec)
+  function renderElementAtTime(
+    el: VectorElement,
+    tracksOverride?: AnimationTrack[],
+    timeOverride?: number
+  ): string {
+    const effTracks = tracksOverride ?? tracks
+    const effTime = timeOverride ?? timeSec
+    let merged = mergeTransformFromTracks(el.transform, el.id, effTracks, effTime)
+    /**
+     * `applyMotionPathToTransform` always resolves the guide path against the
+     * project's top-level elements (motion paths live there even when the
+     * follower is inside a group / symbol). Use the live project tree so
+     * symbol instances with a guide path render correctly here too.
+     */
+    merged = applyMotionPathToTransform(merged, el, project.elements, effTracks, effTime)
     const editorT = transformToSvgString(merged)
     const op = merged.opacity !== 1 ? ` opacity="${merged.opacity}"` : ''
-    const mergedFx = mergeAttrsFromTracks(el.attrs, el.id, tracks, timeSec) as Record<string, unknown>
+    const mergedFx = mergeAttrsFromTracks(el.attrs, el.id, effTracks, effTime) as Record<string, unknown>
     const combinedFx = effectAndSvgFilterFromAttrs(mergedFx)
     const style = combinedFx ? ` style="filter:${escapeXml(combinedFx)};"` : ''
-    const inner = renderInnerAtTime(el)
+    const inner = renderInnerAtTime(el, tracksOverride, timeOverride)
     return `<g id="el_${el.id}" transform="${escapeXml(editorT)}"${op}${style}>${inner}</g>`
   }
 

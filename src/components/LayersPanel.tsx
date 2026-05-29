@@ -261,6 +261,13 @@ export function LayersPanel() {
               value={el.name}
               style={{ flex: 1, minWidth: 0, fontSize: 12 }}
               onClick={(e) => e.stopPropagation()}
+              /**
+               * Block global shortcuts while renaming a layer — see TopBar's
+               * project-name input for the same rationale. Without this, a
+               * stray Backspace would delete the selected layer instead of
+               * editing the name.
+               */
+              onKeyDown={(e) => e.stopPropagation()}
               onChange={(e) => setElementName(el.id, e.target.value)}
             />
             <Tooltip content={`Copy layer id (${el.id})`}>

@@ -33,6 +33,12 @@ const ANIMATABLE_PROPS: AnimatableProperty[] = [
   'svgFilter'
 ]
 
+/**
+ * Easing presets exposed on the inline keyframe inspector in the timeline
+ * header. The right-click context menu intentionally stays focused on
+ * destructive actions (delete / duplicate) — easing lives in the inspector
+ * row where the user can preview the change without dismissing the menu.
+ */
 const EASING_OPTIONS: { id: EasingId; label: string }[] = [
   { id: 'linear', label: 'Linear' },
   { id: 'easeIn', label: 'Ease in (quad)' },
@@ -664,29 +670,12 @@ export function TimelinePanel() {
           }}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', padding: '4px 6px' }}>Easing into next</div>
-          {EASING_OPTIONS.map((opt) => (
-            <button
-              key={opt.id}
-              type="button"
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                padding: '5px 8px',
-                background: keyframeMenu.easing === opt.id || (!keyframeMenu.easing && opt.id === 'linear') ? 'var(--border)' : 'transparent',
-                border: 'none',
-                borderRadius: 4,
-                fontSize: 12
-              }}
-              onClick={() => {
-                setKeyframeEasing(keyframeMenu.trackId, keyframeMenu.keyframeId, opt.id)
-                setKeyframeMenu(null)
-              }}
-            >
-              {opt.label}
-            </button>
-          ))}
-          <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+          {/*
+           * Context-menu surface intentionally limited to destructive / copy
+           * actions. Easing was moved out of here — too easy to mis-click a
+           * preset and not realise the curve changed; the inline picker in
+           * the timeline header lets users iterate with visible feedback.
+           */}
           <button
             type="button"
             style={{

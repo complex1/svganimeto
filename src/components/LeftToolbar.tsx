@@ -8,7 +8,6 @@ import {
   faFont,
   faHand,
   faMinus,
-  faObjectGroup,
   faPaintbrush,
   faPenNib,
   faPencil,
@@ -32,7 +31,12 @@ const TOOL_GROUPS: { id: string; label: string; tools: ToolDef[] }[] = [
     id: 'shapes',
     label: 'Shapes',
     tools: [
-      { id: 'shape-builder', label: 'Shape builder (G)', icon: faObjectGroup },
+      /**
+       * "Shape builder" lives in the inspector's Layout section now — it's a
+       * multi-select operation, not a free-floating tool. Removing the
+       * toolbar entry keeps the left rail focused on direct-manipulation
+       * tools and matches the user-reported workflow ask.
+       */
       { id: 'rect', label: 'Rectangle (R)', icon: faSquare },
       { id: 'circle', label: 'Circle (O)', icon: faCircle },
       { id: 'ellipse', label: 'Ellipse (E)', icon: faCircle },

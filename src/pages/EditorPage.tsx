@@ -100,7 +100,24 @@ export function EditorPage() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      /**
+       * Universal guard: when the user is typing in an input, textarea, or any
+       * contentEditable element, we never want the editor's global shortcuts
+       * to swallow the keystroke. This protects Cmd+Z, Space (play/pause),
+       * Backspace, single-letter tool keys, etc. from firing while renaming a
+       * layer or editing the project title. We still let the event reach the
+       * input's own handlers; we just stop processing it here.
+       */
+      const target = e.target as HTMLElement | null
+      const isEditableField = !!(
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      )
       const meta = e.metaKey || e.ctrlKey
+      if (isEditableField) return
       if (meta && e.key.toLowerCase() === 'z') {
         e.preventDefault()
         if (e.shiftKey) redo()
@@ -120,8 +137,6 @@ export function EditorPage() {
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (mode === 'preview') return
-        const t = e.target as HTMLElement
-        if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
         e.preventDefault()
         deleteSelected()
       }
@@ -131,8 +146,6 @@ export function EditorPage() {
         e.key.toLowerCase() === 'g' &&
         (mode === 'draw' || mode === 'animate')
       ) {
-        const t = e.target as HTMLElement
-        if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
         e.preventDefault()
         useEditorStore.getState().groupSelection()
         return
@@ -143,17 +156,60 @@ export function EditorPage() {
         e.key.toLowerCase() === 'd' &&
         (mode === 'draw' || mode === 'animate')
       ) {
-        const t = e.target as HTMLElement
-        if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
         e.preventDefault()
         useEditorStore.getState().duplicateSelection()
         return
+      }
+      /**
+       * Ctrl/Cmd+C / Ctrl/Cmd+V. The same shortcut serves layers and timeline
+       * keyframes — we choose between them based on what's selected: if any
+       * keyframes are highlighted in the timeline, that wins (keyframes feel
+       * narrower / more "intentional" than the layer selection). Otherwise we
+       * fall back to layer subtree copy/paste. Doing it at this level keeps
+       * the timeline panel from needing its own keyboard plumbing.
+       */
+      if (meta && !e.shiftKey && (mode === 'draw' || mode === 'animate')) {
+        if (e.key.toLowerCase() === 'c') {
+          const st = useEditorStore.getState()
+          if (st.selectedKeyframes.length > 0) {
+            e.preventDefault()
+            st.copySelectedKeyframes()
+            return
+          }
+          if (st.selectedIds.length > 0) {
+            e.preventDefault()
+            st.copySelectedElements()
+            return
+          }
+        }
+        if (e.key.toLowerCase() === 'v') {
+          const st = useEditorStore.getState()
+          /**
+           * Prefer keyframe paste when a keyframe clipboard exists AND we're
+           * actively working in the timeline (some keyframes selected, or no
+           * layer selection). Otherwise paste layers. This matches the copy
+           * heuristic above so a round-trip stays in the same lane.
+           */
+          if (
+            st.keyframeClipboard &&
+            st.keyframeClipboard.length > 0 &&
+            (st.selectedKeyframes.length > 0 || st.selectedIds.length === 0)
+          ) {
+            e.preventDefault()
+            st.pasteKeyframesAtTime()
+            return
+          }
+          if (st.elementClipboard && st.elementClipboard.length > 0) {
+            e.preventDefault()
+            st.pasteElementsFromClipboard()
+            return
+          }
+        }
       }
       if (mode === 'draw') {
         const key = e.key.toLowerCase()
         if (key === 'v') setActiveTool('select')
         if (key === 'h') setActiveTool('hand')
-        if (key === 'g') setActiveTool('shape-builder')
         if (key === 'r') setActiveTool('rect')
         if (key === 'o') setActiveTool('circle')
         if (key === 'e') setActiveTool('ellipse')

@@ -18,6 +18,17 @@ import type {
   KeyframeSelectionEntry,
   NoiseDef
 } from '@/types/animation'
+
+/**
+ * Snapshot of a copied root subtree plus the animation tracks that reference
+ * any element id inside it. Kept in-store (not on the system clipboard) so the
+ * data structure can carry full transforms, attrs, and tracks without
+ * round-tripping through serialisation.
+ */
+export type ElementClipboardEntry = {
+  element: VectorElement
+  tracks: AnimationTrack[]
+}
 import { mergeTransformFromTracks, sampleTrack } from '@/engines/animation/interpolate'
 import { sampleMergedTransformForElement } from '@/engines/animation/gsapTrackCompiler'
 import { getLocalShapeCenter } from '@/engines/geometry/localShapeBounds'
@@ -30,7 +41,8 @@ import { importSvgString } from '@/engines/importer/svgImporter'
 import {
   cloneSubtreeNewIds,
   duplicateSelectedInDocument,
-  remapMotionPathIdsForClone
+  remapMotionPathIdsForClone,
+  selectionDuplicateRoots
 } from '@/engines/document/duplicateElements'
 import { groupSelectedElements } from '@/engines/document/groupElements'
 import {
@@ -188,6 +200,13 @@ type EditorState = {
   /** Timeline keyframe multi-selection (UI only). */
   selectedKeyframes: KeyframeSelectionEntry[]
   keyframeClipboard: KeyframeClipboardEntry[] | null
+  /**
+   * In-memory copy buffer for layer subtrees (Ctrl+C / Ctrl+V). Each entry is a
+   * deep-cloned snapshot of one selected root subtree at copy time, paired with
+   * the animation tracks that reference any element id inside it. Pasting
+   * always clones with fresh ids so repeated pastes don't collide.
+   */
+  elementClipboard: ElementClipboardEntry[] | null
 
   pushHistory: () => void
   undo: () => void
@@ -290,6 +309,10 @@ type EditorState = {
   setKeyframeEasing: (trackId: string, keyframeId: string, easing: EasingId) => void
   copySelectedKeyframes: () => void
   pasteKeyframesAtTime: (anchorTime?: number) => void
+  /** Snapshot the current root selection into `elementClipboard` (Ctrl+C). */
+  copySelectedElements: () => void
+  /** Insert a fresh clone of `elementClipboard` at top level and select it (Ctrl+V). */
+  pasteElementsFromClipboard: () => void
   nudgeSelectedKeyframes: (deltaSec: number) => void
   deleteSelectedKeyframes: () => void
   addKeyframeAtPlayhead: (elementId: string, property: AnimatableProperty) => void
@@ -490,6 +513,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     selectedKeyframes: [],
     keyframeClipboard: null,
+    elementClipboard: null,
 
     pushHistory: () => {
       const snap = captureHistory(get())
@@ -533,6 +557,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         selectedIds: [],
         selectedKeyframes: [],
         keyframeClipboard: null,
+        elementClipboard: null,
         tracks: [],
         viewBox: { x: 0, y: 0, width: p.width, height: p.height },
         historyPast: [],
@@ -553,6 +578,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         selectedIds: [],
         selectedKeyframes: [],
         keyframeClipboard: null,
+        elementClipboard: null,
         tracks: [],
         currentTime: 0,
         playbackSpeed: 1,
@@ -577,6 +603,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         projectPath: path ?? null,
         selectedKeyframes: [],
         keyframeClipboard: null,
+        elementClipboard: null,
         viewBox: { x: 0, y: 0, width: p.width, height: p.height },
         historyPast: [],
         historyFuture: []
@@ -1360,6 +1387,91 @@ export const useEditorStore = create<EditorState>((set, get) => {
           { skipHistory: true, valueText: entry.valueText }
         )
       }
+    },
+
+    copySelectedElements: () => {
+      const s = get()
+      if (s.mode === 'preview' || s.mode === 'export') return
+      if (s.selectedIds.length === 0) {
+        set({ elementClipboard: null })
+        return
+      }
+      /**
+       * Reduce the selection to non-overlapping subtree roots (an outer group
+       * already covers its inner children) and snapshot each root verbatim
+       * along with any tracks targeting an element id inside it. Later pastes
+       * regenerate ids from these snapshots, so we deliberately keep the
+       * original ids here — `pasteElementsFromClipboard` does the cloning.
+       */
+      const rootIds = selectionDuplicateRoots(s.project.elements, s.selectedIds)
+      if (rootIds.length === 0) {
+        set({ elementClipboard: null })
+        return
+      }
+      const entries: ElementClipboardEntry[] = []
+      for (const id of rootIds) {
+        const loc = findElement(s.project.elements, id)
+        if (!loc) continue
+        const subtreeIds = new Set<string>()
+        const walk = (el: VectorElement) => {
+          subtreeIds.add(el.id)
+          el.children?.forEach(walk)
+        }
+        walk(loc.node)
+        const localTracks = s.tracks.filter((t) => subtreeIds.has(t.elementId))
+        entries.push({
+          element: structuredClone(loc.node),
+          tracks: structuredClone(localTracks)
+        })
+      }
+      if (entries.length === 0) {
+        set({ elementClipboard: null })
+        return
+      }
+      set({ elementClipboard: entries })
+    },
+
+    pasteElementsFromClipboard: () => {
+      const s0 = get()
+      if (s0.mode === 'preview' || s0.mode === 'export') return
+      const clip = s0.elementClipboard
+      if (!clip || clip.length === 0) return
+      /**
+       * Each paste rebuilds ids from scratch (`cloneSubtreeNewIds`) and remaps
+       * any internal motion-path references plus animation tracks so repeated
+       * pastes don't collide with previous ones (or with the originals). New
+       * roots are appended at the top level — most predictable behaviour for
+       * a global shortcut; users can drag them into the desired group after.
+       */
+      const newRoots: VectorElement[] = []
+      const newTracks: AnimationTrack[] = []
+      const newSelectedIds: string[] = []
+      for (const entry of clip) {
+        const { node, oldToNew } = cloneSubtreeNewIds(entry.element)
+        const remapped = remapMotionPathIdsForClone(node, oldToNew)
+        newRoots.push(remapped)
+        newSelectedIds.push(remapped.id)
+        for (const tr of entry.tracks) {
+          const remappedElId = oldToNew.get(tr.elementId)
+          if (!remappedElId) continue
+          newTracks.push({
+            ...tr,
+            id: nanoid(8),
+            elementId: remappedElId,
+            keyframes: tr.keyframes.map((k) => ({ ...k, id: nanoid(8) }))
+          })
+        }
+      }
+      if (newRoots.length === 0) return
+      withHistory((s) => ({
+        project: {
+          ...s.project,
+          elements: [...s.project.elements, ...newRoots]
+        },
+        tracks: [...s.tracks, ...newTracks],
+        selectedIds: newSelectedIds,
+        selectedKeyframes: []
+      }))
     },
 
     nudgeSelectedKeyframes: (deltaSec) => {

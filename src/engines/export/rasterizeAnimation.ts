@@ -2,8 +2,17 @@ import { GIFEncoder, quantize, applyPalette } from 'gifenc'
 import type { Project } from '@/types/document'
 import type { AnimationTrack } from '@/types/animation'
 import { exportStillFrameSvg } from '@/engines/export/exportSvg'
+import { paintSvgWithResvg } from '@/wasm/resvg/rasterizer'
 
 export type RasterizeProgress = { current: number; total: number }
+
+/**
+ * Backdrop colour that the legacy `<img>` rasterizer painted under every frame.
+ * Hoisted so the Resvg path can match it pixel-for-pixel — GIF dithering is
+ * sensitive to background contrast, so a sudden swap to transparent would
+ * change palette quantisation between releases.
+ */
+const FRAME_BACKDROP = '#f4f5f7'
 
 function scaleDimensions(
   projectW: number,
@@ -29,6 +38,20 @@ export async function drawSvgFrameToCanvas(
   h: number
 ): Promise<void> {
   const svg = exportStillFrameSvg(project, tracks, timeSec)
+
+  /**
+   * Try the resvg-wasm path first. It internally paints the backdrop and the
+   * SVG; on success we're done. On failure (WASM disabled, init error, weird
+   * SVG content resvg rejects, etc.) we silently fall through to the original
+   * `<img>` decode path so a single bad frame never aborts a long export.
+   */
+  const paintedViaWasm = await paintSvgWithResvg(ctx, svg, {
+    width: w,
+    height: h,
+    background: FRAME_BACKDROP
+  })
+  if (paintedViaWasm) return
+
   const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   try {
@@ -38,7 +61,7 @@ export async function drawSvgFrameToCanvas(
       img.onerror = () => reject(new Error('Could not decode SVG for export frame'))
       img.src = url
     })
-    ctx.fillStyle = '#f4f5f7'
+    ctx.fillStyle = FRAME_BACKDROP
     ctx.fillRect(0, 0, w, h)
     ctx.drawImage(img, 0, 0, w, h)
   } finally {

@@ -4,9 +4,13 @@
  * @see src/vendor/imagetracer_v1.2.6.js
  */
 import RasterTraceWorker from '@/workers/rasterTrace.worker?worker'
-import type { RasterTraceWorkerRequest } from '@/workers/rasterTrace.worker'
+import type {
+  RasterTraceEngine,
+  RasterTraceWorkerRequest
+} from '@/workers/rasterTrace.worker'
 import type { RasterTraceImageTracerOptions } from '@/engines/importer/rasterTraceOptions'
 import { preprocessImageData, type RasterPreprocessOptions } from '@/engines/importer/imagePreprocess'
+import type { PotraceOptions } from '@/wasm/potrace/tracer'
 
 export type TraceProgressPayload = {
   phase: string
@@ -19,6 +23,15 @@ export type RasterTracePipelineConfig = {
   maxSide: number
   traceOptions: RasterTraceImageTracerOptions
   preprocess: RasterPreprocessOptions
+  /**
+   * Which tracing engine to use. `'auto'` (the default) tries the WASM
+   * potrace engine first because it's faster and outputs crisper curves for
+   * mono/posterised art, then falls back to the legacy ImageTracer when the
+   * WASM module isn't usable in the current environment.
+   */
+  engine?: RasterTraceEngine
+  /** Tuning for the WASM potrace path. Ignored when engine === 'imagetracer'. */
+  potraceOptions?: PotraceOptions
 }
 
 export function humanizeTraceStatus(u: TraceProgressPayload): string {
@@ -82,7 +95,9 @@ export async function blobToScaledImageData(blob: Blob, maxSide: number): Promis
 async function traceInWorker(
   imgd: ImageData,
   traceOptions: RasterTraceWorkerRequest['traceOptions'],
-  onProgress?: (u: TraceProgressPayload) => void
+  onProgress?: (u: TraceProgressPayload) => void,
+  engine: RasterTraceEngine = 'auto',
+  potraceOptions: PotraceOptions = {}
 ): Promise<string> {
   const WorkerCtor = RasterTraceWorker as unknown as new () => Worker
   const worker = new WorkerCtor()
@@ -91,7 +106,7 @@ async function traceInWorker(
     worker.onmessage = (e: MessageEvent) => {
       const d = e.data as
         | { type: 'progress'; phase: string; percent: number; layer?: number; totalLayers?: number }
-        | { type: 'done'; svg: string }
+        | { type: 'done'; svg: string; engineUsed?: RasterTraceEngine }
         | { type: 'error'; message: string }
 
       if (d.type === 'progress') {
@@ -119,8 +134,10 @@ async function traceInWorker(
     worker.postMessage(
       {
         imageData: { buffer: buf, width: imgd.width, height: imgd.height },
-        traceOptions
-      },
+        traceOptions,
+        engine,
+        potraceOptions
+      } satisfies RasterTraceWorkerRequest,
       [buf]
     )
   })
@@ -145,7 +162,13 @@ async function traceImageDataOnMainThread(
 }
 
 /**
- * Decode → scale → optional preprocess → ImageTracer (worker or main-thread fallback).
+ * Decode → scale → optional preprocess → trace.
+ *
+ * Tracing happens in a Web Worker so the UI stays responsive. The worker
+ * tries `potrace-wasm` first (cleaner curves, faster on B&W input) and falls
+ * back to the vendored ImageTracer when WASM is unavailable. If the worker
+ * itself fails to load (e.g. file:// runs with strict CSP), we run
+ * ImageTracer on the main thread as a last resort.
  */
 export async function traceBitmapWithConfig(
   blob: Blob,
@@ -161,7 +184,13 @@ export async function traceBitmapWithConfig(
   }
 
   try {
-    return await traceInWorker(imgd, config.traceOptions, onProgress)
+    return await traceInWorker(
+      imgd,
+      config.traceOptions,
+      onProgress,
+      config.engine ?? 'auto',
+      config.potraceOptions ?? {}
+    )
   } catch (e) {
     console.warn('[rasterTrace] worker failed, falling back to main thread', e)
     onProgress?.({ phase: 'layers', percent: 15 })

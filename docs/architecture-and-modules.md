@@ -213,7 +213,27 @@ Pure (or mostly pure) logic — no React. Grouped by domain.
 
 | File | Role |
 |------|------|
-| `rasterTrace.worker.ts` | Off-main-thread raster tracing to keep UI responsive. |
+| `rasterTrace.worker.ts` | Off-main-thread raster tracing. Runs the WASM **potrace** engine first (sharper curves, faster on B&W/posterised input) and falls back to the vendored ImageTracer when WASM is unavailable. ES-module worker so it can dynamic-import `esm-potrace-wasm` lazily. |
+
+---
+
+## WebAssembly engines (`src/wasm/`)
+
+Three performance-critical pipelines route through WASM back-ends with JS fallbacks. Every loader is lazy + idempotent: the WASM payloads are never fetched until the first relevant user action (preview bake / export, shape-builder click, raster trace import), and they're code-split into their own chunks so the landing page and an empty editor pay nothing.
+
+| Module | Package | Used by | Fallback |
+|--------|---------|---------|----------|
+| `wasm/resvg/` | `@resvg/resvg-wasm` (~600 KB gz, ~2.5 MB raw) | `engines/export/rasterizeAnimation.ts` → `drawSvgFrameToCanvas`. Drives both `usePreRenderedFrames` (preview bake) and the GIF / video exporter. | `<img>` decode of an `image/svg+xml` Blob URL (the legacy path). |
+| `wasm/clipper/` | `js-angusj-clipper` (Clipper2 → wasm + asm.js fallback) | `engines/geometry/polygonClippingApi.ts` re-exports `union` / `intersection` / `xor` / `difference`. Hot users: shape builder, eraser, motion-path booleans. | `polygon-clipping` (pure JS) — same API, slower on heavy ops. |
+| `wasm/potrace/` | `esm-potrace-wasm` (~50 KB gz) | `workers/rasterTrace.worker.ts` calls it first when tracing imported bitmaps. | Vendored `ImageTracer.js` (legacy path, always available). |
+
+Shared contract:
+
+- `loader.ts` exposes `ensure<Engine>Ready(): Promise<EngineInstance | null>`. Dynamic `import()` keeps the JS glue out of the main bundle. Concurrent callers share one promise. Failure resolves to `null` — never throws.
+- The façade file (`rasterizer.ts` / `clipperOps.ts` / `tracer.ts`) exposes a small problem-shaped API. It checks `wasmFlags.ts` and `<Engine>ReadySync` (when applicable) to decide WASM vs JS per call. The Clipper façade additionally wraps the WASM call in `withFallback` so an isolated input error never breaks the user's shape-builder click.
+- `wasmFlags.ts` (`isWasmEnabled('rasterizer' | 'boolean' | 'tracer')`) is the single runtime opt-out — useful for debugging suspected WASM-induced regressions.
+
+Build wiring: `electron.vite.config.ts` sets `worker.format: 'es'` so worker files can dynamic-import the potrace WASM payload.
 
 ---
 
@@ -263,7 +283,9 @@ Component-scoped hooks:
 2. **Playback** → `usePlaybackLoop` advances `currentTime` → sampling via **`interpolate`** / **`attrAnimation`** / **`noise`** / **`motionPathApply`** flows into the renderer (Draw/Animate) or paints the matching pre-rendered bitmap (Preview).
 3. **Render** → `ElementRenderer` samples the merged transform, layers noise on top, applies motion path, then renders the shape and (when present) the `TexturedStrokeLayer` inside the same `<g>` so transforms carry the stamps along.
 4. **Save** → `serializeProject()` JSON → **`ProjectStoragePort.write`** or Electron **`saveProject`** dialog path.
-5. **Export** → `ExportDialog` calls **`exportSvg` / `exportHtml` / `rasterizeAnimation`** → `window.api.saveExport` or browser download. Hidden layers are stripped (`filterVisibleTree`); textures are baked (`renderTextureBrushSvg`).
+5. **Export** → `ExportDialog` calls **`exportSvg` / `exportHtml` / `rasterizeAnimation`** → `window.api.saveExport` or browser download. Hidden layers are stripped (`filterVisibleTree`); textures are baked (`renderTextureBrushSvg`). Per-frame rasterization routes through `wasm/resvg/` when available.
+6. **Booleans** (shape builder, eraser, motion-path clipping) → `polygonClippingApi.ts` → `wasm/clipper/` (Clipper2) when loaded, else `polygon-clipping` JS.
+7. **Raster import** → `RasterImportModal` → `engines/importer/rasterTrace.ts` spawns `rasterTrace.worker.ts` → `wasm/potrace/` first, else vendored ImageTracer.
 
 ---
 

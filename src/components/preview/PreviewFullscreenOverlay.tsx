@@ -35,13 +35,25 @@ export function PreviewFullscreenOverlay() {
   const setPlaybackSpeed = useEditorStore((s) => s.setPlaybackSpeed)
   const projectFps = useEditorStore((s) => s.fps)
 
+  /**
+   * Preview-local FPS — independent from the project FPS so users can taste a
+   * higher-or-lower-than-authoring frame rate without committing to the
+   * project setting. Snaps to a small list of common cinematic / web rates
+   * for predictable cadence (24/30/60 are by far the most common asks).
+   */
+  const [previewFps, setPreviewFps] = useState<number>(projectFps)
+  /** Keep the local picker in sync if the project FPS changes upstream. */
+  useEffect(() => {
+    setPreviewFps(projectFps)
+  }, [projectFps])
+
   /** Manual re-bake counter — bumps `enabled`'s identity so the hook restarts. */
   const [reBakeNonce, setReBakeNonce] = useState(0)
   const bake = usePreRenderedFrames({
     project,
     tracks,
     durationSec: duration,
-    fps: projectFps,
+    fps: previewFps,
     enabled: true
   })
 
@@ -351,7 +363,7 @@ export function PreviewFullscreenOverlay() {
           type="range"
           min={0}
           max={Math.max(0.001, duration)}
-          step={1 / Math.max(1, ready ? bake.fps : projectFps)}
+          step={1 / Math.max(1, ready ? bake.fps : previewFps)}
           value={Math.min(currentTime, duration)}
           disabled={!ready}
           onChange={(e) => {
@@ -386,6 +398,40 @@ export function PreviewFullscreenOverlay() {
                 {sp}x
               </option>
             ))}
+          </select>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          FPS
+          <select
+            value={String(previewFps)}
+            onChange={(e) => {
+              const next = Number(e.target.value)
+              if (!Number.isFinite(next) || next <= 0) return
+              setPreviewFps(next)
+              /**
+               * Changing FPS triggers a fresh bake via the hook's dependency
+               * key, but we also bump the re-bake nonce so the "renderering…"
+               * curtain shows even when the new FPS happens to land on the
+               * same effective frame count as the previous one.
+               */
+              setReBakeNonce((n) => n + 1)
+            }}
+            style={{
+              fontSize: 12,
+              padding: '4px 8px',
+              borderRadius: 6,
+              background: 'var(--bg-app)',
+              border: '1px solid var(--border)'
+            }}
+          >
+            {[12, 15, 24, 25, 30, 48, 50, 60].map((rate) => (
+              <option key={rate} value={rate}>
+                {rate}
+              </option>
+            ))}
+            {![12, 15, 24, 25, 30, 48, 50, 60].includes(previewFps) && (
+              <option value={previewFps}>{previewFps} (project)</option>
+            )}
           </select>
         </label>
         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Space: play/pause · Esc: exit</span>
