@@ -3,6 +3,12 @@ import type { AnimationTrack } from '@/types/animation'
 import { sampleMergedTransformForElement } from '@/engines/animation/gsapTrackCompiler'
 import { flattenForLayers } from '@/engines/document/tree'
 import { parentWorldMatrix } from '@/engines/geometry/svgWorldTransform'
+import {
+  type Mat2D,
+  rotateAboutMat,
+  scaleAboutMat,
+  translateMat
+} from '@/engines/geometry/transformGeometry'
 
 /**
  * One drag target. We rotate / scale around a pivot expressed in the SVG root user
@@ -109,6 +115,31 @@ export function buildTransformDragTargets(
  * All math runs directly on (x, y, scaleX, scaleY, rotation) — no decomposition of a world
  * matrix — so we can't lose precision and rotation is guaranteed to happen *around* the pivot.
  */
+/**
+ * The same move / scale / rotate gesture expressed as a single affine matrix in
+ * SVG-root space. Geometry baking (Tier A elements) applies this to the points;
+ * the transform-partial variant below is kept for Tier B (group/text/image).
+ */
+export function computeDragMatrix(
+  pivotSvg: { x: number; y: number },
+  startSvg: { x: number; y: number },
+  curSvg: { x: number; y: number },
+  startDist: number,
+  startAngle: number,
+  kind: 'move' | 'scale' | 'rotate'
+): Mat2D {
+  if (kind === 'move') {
+    return translateMat(curSvg.x - startSvg.x, curSvg.y - startSvg.y)
+  }
+  if (kind === 'scale') {
+    const dist = Math.hypot(curSvg.x - pivotSvg.x, curSvg.y - pivotSvg.y) || 1
+    const s = dist / startDist
+    return scaleAboutMat(s, s, pivotSvg.x, pivotSvg.y)
+  }
+  const ang = (Math.atan2(curSvg.y - pivotSvg.y, curSvg.x - pivotSvg.x) * 180) / Math.PI
+  return rotateAboutMat(ang - startAngle, pivotSvg.x, pivotSvg.y)
+}
+
 export function applyTransformDragMove(
   targets: TransformDragTarget[],
   pivotSvg: { x: number; y: number },

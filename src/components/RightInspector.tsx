@@ -12,6 +12,17 @@ import {
   sampleMergedTransformForElement
 } from '@/engines/animation/gsapTrackCompiler'
 import { getLocalShapeCenter } from '@/engines/geometry/localShapeBounds'
+import {
+  bakeMatrixIntoElement,
+  elementGeometryToPathD,
+  isPointBakeType,
+  matFromTransform,
+  mul,
+  rotateAboutMat,
+  scaleAboutMat,
+  translateMat,
+  type Mat2D
+} from '@/engines/geometry/transformGeometry'
 import type { AnimationTrack, NoiseDef, NoiseProperty } from '@/types/animation'
 import type { VectorElement } from '@/types/document'
 import type { TextureBrush, TextureBrushPresetId } from '@/types/texture'
@@ -26,6 +37,59 @@ import {
   TEXTURE_BRUSH_ELIGIBLE_TYPES,
   TEXTURE_BRUSH_PRESETS
 } from '@/engines/texture/textureBrushes'
+
+/**
+ * Incremental transform field for geometry-baked (Tier A) elements. These have
+ * no persisted rotation/scale on a matrix — every edit bakes into the points and
+ * the transform resets to identity — so the field can't show a running value.
+ * It shows a baseline (0 for rotate/skew, 1 for scale), lets the user type a
+ * delta, then commits on Enter/blur and snaps back to the baseline.
+ */
+function GeomDeltaInput({
+  label,
+  baseline,
+  step,
+  disabled,
+  onCommit
+}: {
+  label: string
+  baseline: number
+  step: number
+  disabled?: boolean
+  onCommit: (value: number) => void
+}) {
+  const [draft, setDraft] = useState(String(baseline))
+  useEffect(() => {
+    setDraft(String(baseline))
+  }, [baseline])
+  const commit = () => {
+    const v = Number(draft)
+    if (Number.isFinite(v)) onCommit(v)
+    setDraft(String(baseline))
+  }
+  return (
+    <label
+      style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}
+    >
+      <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+      <input
+        type="number"
+        step={step}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') {
+            commit()
+            ;(e.target as HTMLInputElement).blur()
+          }
+        }}
+        onBlur={commit}
+      />
+    </label>
+  )
+}
 
 function InspectorHelpIcon({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -150,6 +214,8 @@ export function RightInspector() {
   const tracks = useEditorStore((s) => s.tracks)
   const currentTime = useEditorStore((s) => s.currentTime)
   const updateTransform = useEditorStore((s) => s.updateTransform)
+  const updateElementGeometry = useEditorStore((s) => s.updateElementGeometry)
+  const writeGeometryKeyframe = useEditorStore((s) => s.writeGeometryKeyframe)
   const pushHistory = useEditorStore((s) => s.pushHistory)
   const setElementAttrs = useEditorStore((s) => s.setElementAttrs)
   const setElementNoise = useEditorStore((s) => s.setElementNoise)
@@ -531,8 +597,11 @@ export function RightInspector() {
     opacity: 'Opacity'
   }
 
-  const row = (label: string, key: PropKey) => (
-    <label style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+  const matrixRow = (label: string, key: PropKey) => (
+    <label
+      key={key}
+      style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}
+    >
       <span style={{ color: 'var(--text-muted)' }}>{label}</span>
       <input
         type="number"
@@ -546,6 +615,115 @@ export function RightInspector() {
       />
     </label>
   )
+
+  /**
+   * Tier A (point-baking) elements edit geometry, not a transform matrix — but a
+   * motion-path layer still uses (x,y) as an additive offset, so it keeps the
+   * matrix fields. Opacity is never geometry either.
+   */
+  const geometryEditable = isPointBakeType(el.type) && !motionPathActive
+  const localCenter = geometryEditable ? getLocalShapeCenter(el) ?? { x: 0, y: 0 } : { x: 0, y: 0 }
+  const localPivot = el.pivot ?? localCenter
+
+  /** Apply a local-space op matrix to the element's geometry (Draw bakes, Animate keyframes). */
+  const applyGeometryOp = (opLocal: Mat2D) => {
+    const M = mul(opLocal, matFromTransform(el.transform))
+    const baked = bakeMatrixIntoElement(el, M)
+    if (!baked) return
+    if (mode === 'animate' || mode === 'preview') {
+      const d =
+        baked.type === 'path' && typeof baked.attrs.d === 'string'
+          ? (baked.attrs.d as string)
+          : elementGeometryToPathD({ ...el, type: baked.type, attrs: baked.attrs })
+      if (d) writeGeometryKeyframe(el.id, d)
+    } else {
+      pushHistory()
+      updateElementGeometry(el.id, baked, { skipHistory: true })
+      updateTransform(
+        el.id,
+        { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, skewX: 0, skewY: 0 },
+        { skipHistory: true }
+      )
+    }
+  }
+
+  const skewAboutPivot = (deg: number, axis: 'x' | 'y'): Mat2D => {
+    const tan = Math.tan((deg * Math.PI) / 180)
+    const sk: Mat2D =
+      axis === 'x'
+        ? { a: 1, b: 0, c: tan, d: 1, e: 0, f: 0 }
+        : { a: 1, b: tan, c: 0, d: 1, e: 0, f: 0 }
+    return mul(translateMat(localPivot.x, localPivot.y), mul(sk, translateMat(-localPivot.x, -localPivot.y)))
+  }
+
+  const row = (label: string, key: PropKey) => {
+    if (!geometryEditable || key === 'opacity') return matrixRow(label, key)
+    if (key === 'x' || key === 'y') {
+      const cur = key === 'x' ? localCenter.x : localCenter.y
+      return (
+        <label
+          key={key}
+          style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, alignItems: 'center', marginBottom: 8 }}
+        >
+          <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+          <input
+            type="number"
+            step={1}
+            value={Number(cur.toFixed(2))}
+            disabled={attrsUiLocked}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              if (!Number.isFinite(v)) return
+              applyGeometryOp(
+                key === 'x' ? translateMat(v - localCenter.x, 0) : translateMat(0, v - localCenter.y)
+              )
+            }}
+          />
+        </label>
+      )
+    }
+    if (key === 'rotation') {
+      return (
+        <GeomDeltaInput
+          key={key}
+          label="Rotate by°"
+          baseline={0}
+          step={1}
+          disabled={attrsUiLocked}
+          onCommit={(v) => applyGeometryOp(rotateAboutMat(v, localPivot.x, localPivot.y))}
+        />
+      )
+    }
+    if (key === 'scaleX' || key === 'scaleY') {
+      return (
+        <GeomDeltaInput
+          key={key}
+          label={key === 'scaleX' ? 'Scale X ×' : 'Scale Y ×'}
+          baseline={1}
+          step={0.1}
+          disabled={attrsUiLocked}
+          onCommit={(v) =>
+            applyGeometryOp(
+              key === 'scaleX'
+                ? scaleAboutMat(v, 1, localPivot.x, localPivot.y)
+                : scaleAboutMat(1, v, localPivot.x, localPivot.y)
+            )
+          }
+        />
+      )
+    }
+    // skewX / skewY
+    return (
+      <GeomDeltaInput
+        key={key}
+        label={key === 'skewX' ? 'Skew X by°' : 'Skew Y by°'}
+        baseline={0}
+        step={1}
+        disabled={attrsUiLocked}
+        onCommit={(v) => applyGeometryOp(skewAboutPivot(v, key === 'skewX' ? 'x' : 'y'))}
+      />
+    )
+  }
 
   const blurFx = Math.max(0, numAttr('__fxBlur', 0))
   const shadowXFx = numAttr('__fxShadowX', 0)
@@ -613,6 +791,12 @@ export function RightInspector() {
               <>
                 Motion path is active. The layer rides along the guide path; <strong>X/Y</strong> now act as a
                 constant offset added on top of the path point. Set them to 0 to snap exactly onto the path.
+              </>
+            ) : geometryEditable ? (
+              <>
+                These edits bake into the shape's <strong>points</strong> around its pivot (no scale/rotate
+                matrix). <strong>X/Y</strong> set the shape centre; <strong>Rotate/Scale/Skew</strong> apply a
+                one-shot delta (commit with Enter). In Animate they write <strong>pathD</strong> keyframes.
               </>
             ) : undefined
           }

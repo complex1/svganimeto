@@ -70,6 +70,12 @@ export type VectorElement = {
    * naturally rotate and follow the curve.
    */
   textureBrush?: import('./texture').TextureBrush
+  /**
+   * Persisted transform pivot in the element's own local geometry coordinates.
+   * Move / resize / rotate operations happen around this point. When unset the
+   * pivot defaults to the element's local bbox centre.
+   */
+  pivot?: { x: number; y: number }
 }
 
 export type Asset = {

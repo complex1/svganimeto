@@ -2,7 +2,13 @@ import clsx from 'clsx'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faFileArrowUp, faFloppyDisk, faHouse, faImage } from '@fortawesome/free-solid-svg-icons'
+import {
+  faCrosshairs,
+  faFileArrowUp,
+  faFloppyDisk,
+  faHouse,
+  faImage
+} from '@fortawesome/free-solid-svg-icons'
 import { SvgAnimetoLogo } from '@/components/brand/SvgAnimetoLogo'
 import { Tooltip } from '@/components/Tooltip'
 import { useEditorStore } from '@/store/editorStore'
@@ -41,6 +47,9 @@ export function TopBar() {
   const projectHeight = useEditorStore((s) => s.project.height)
   const setCanvasSize = useEditorStore((s) => s.setCanvasSize)
   const symbolEditing = useEditorStore((s) => !!s.symbolEditBackup)
+  const showPivots = useEditorStore((s) => s.showPivots)
+  const toggleShowPivots = useEditorStore((s) => s.toggleShowPivots)
+  const showPivotToggle = mode === 'draw' || mode === 'animate'
   const canvasSizeLocked = symbolEditing || mode === 'preview' || mode === 'export'
   const canvasSizeSelectValue = useMemo(() => {
     const match = CANVAS_SIZE_PRESETS.find(
@@ -218,6 +227,19 @@ export function TopBar() {
         </label>
       </Tooltip>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+        {showPivotToggle && (
+          <Tooltip content={showPivots ? 'Hide pivot points' : 'Show pivot points'}>
+            <button
+              type="button"
+              className={clsx(showPivots && 'active')}
+              aria-pressed={showPivots}
+              onClick={() => toggleShowPivots()}
+            >
+              <FontAwesomeIcon icon={faCrosshairs} style={{ marginRight: 6 }} />
+              Pivot
+            </button>
+          </Tooltip>
+        )}
         <Tooltip
           content={
             symbolEditing ? 'Finish symbol editing first' : 'Save project (⌘S / Ctrl+S)'

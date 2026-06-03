@@ -34,6 +34,10 @@ import type { PathPoint, PathPointMode } from '@/types/document'
 import { buildFillPathFromRasterSample } from '@/engines/geometry/rasterBucketFill'
 import { elementShapeToPathD } from '@/engines/geometry/shapeToPath'
 import { buildPencilStroke } from '@/engines/geometry/pencilPath'
+import {
+  parsePathDToPoints,
+  pathDFromPoints
+} from '@/engines/geometry/transformGeometry'
 import { CanvasGuideOverlay } from '@/components/canvas/CanvasGuideOverlay'
 import { bboxInSvgRootSpace } from '@/components/canvas/svgBounds'
 import type { CanvasGuideType } from '@/types/canvasGuide'
@@ -284,120 +288,6 @@ function ellipseToPathPoints(cx: number, cy: number, rx: number, ry: number): Pa
   ]
 }
 
-function pathDFromPoints(points: PathPoint[], closePath = false) {
-  if (points.length < 2) return ''
-  let d = `M ${Number(points[0].x.toFixed(2))} ${Number(points[0].y.toFixed(2))}`
-  for (let i = 1; i < points.length; i += 1) {
-    const prev = points[i - 1]
-    const cur = points[i]
-    const cp1x = prev.outX
-    const cp1y = prev.outY
-    const cp2x = cur.inX
-    const cp2y = cur.inY
-    if (
-      typeof cp1x === 'number' &&
-      typeof cp1y === 'number' &&
-      typeof cp2x === 'number' &&
-      typeof cp2y === 'number'
-    ) {
-      d += ` C ${Number(cp1x.toFixed(2))} ${Number(cp1y.toFixed(2))} ${Number(cp2x.toFixed(2))} ${Number(cp2y.toFixed(2))} ${Number(cur.x.toFixed(2))} ${Number(cur.y.toFixed(2))}`
-    } else {
-      d += ` L ${Number(cur.x.toFixed(2))} ${Number(cur.y.toFixed(2))}`
-    }
-  }
-  if (closePath) {
-    const last = points[points.length - 1]
-    const first = points[0]
-    if (
-      typeof last.outX === 'number' &&
-      typeof last.outY === 'number' &&
-      typeof first.inX === 'number' &&
-      typeof first.inY === 'number'
-    ) {
-      d += ` C ${Number(last.outX.toFixed(2))} ${Number(last.outY.toFixed(2))} ${Number(first.inX.toFixed(2))} ${Number(first.inY.toFixed(2))} ${Number(first.x.toFixed(2))} ${Number(first.y.toFixed(2))}`
-    } else {
-      d += ` L ${Number(first.x.toFixed(2))} ${Number(first.y.toFixed(2))}`
-    }
-    return `${d} Z`
-  }
-  return d
-}
-
-function parsePathDToPoints(d: string): { points: PathPoint[]; closed: boolean } | null {
-  if (!d.trim()) return null
-  const tokens = d.match(/[a-zA-Z]|-?\d*\.?\d+(?:e[-+]?\d+)?/g)
-  if (!tokens || tokens.length === 0) return null
-  const points: PathPoint[] = []
-  let i = 0
-  let cmd = ''
-  let cx = 0
-  let cy = 0
-  let closed = false
-  const readNum = () => {
-    const t = tokens[i]
-    if (t === undefined) return null
-    const n = Number(t)
-    if (!Number.isFinite(n)) return null
-    i += 1
-    return n
-  }
-  while (i < tokens.length) {
-    const t = tokens[i]
-    if (/^[a-zA-Z]$/.test(t)) {
-      cmd = t
-      i += 1
-      if (cmd === 'Z' || cmd === 'z') {
-        closed = true
-      }
-      continue
-    }
-    if (!cmd) return null
-    if (cmd === 'M' || cmd === 'm') {
-      const x = readNum()
-      const y = readNum()
-      if (x === null || y === null) return null
-      cx = cmd === 'm' ? cx + x : x
-      cy = cmd === 'm' ? cy + y : y
-      points.push({ x: cx, y: cy, mode: 'corner' })
-      cmd = cmd === 'm' ? 'l' : 'L'
-      continue
-    }
-    if (cmd === 'L' || cmd === 'l') {
-      const x = readNum()
-      const y = readNum()
-      if (x === null || y === null) return null
-      cx = cmd === 'l' ? cx + x : x
-      cy = cmd === 'l' ? cy + y : y
-      points.push({ x: cx, y: cy, mode: 'corner' })
-      continue
-    }
-    if (cmd === 'C' || cmd === 'c') {
-      const x1 = readNum()
-      const y1 = readNum()
-      const x2 = readNum()
-      const y2 = readNum()
-      const x = readNum()
-      const y = readNum()
-      if ([x1, y1, x2, y2, x, y].some((v) => v === null)) return null
-      const cp1x = cmd === 'c' ? cx + (x1 as number) : (x1 as number)
-      const cp1y = cmd === 'c' ? cy + (y1 as number) : (y1 as number)
-      const cp2x = cmd === 'c' ? cx + (x2 as number) : (x2 as number)
-      const cp2y = cmd === 'c' ? cy + (y2 as number) : (y2 as number)
-      cx = cmd === 'c' ? cx + (x as number) : (x as number)
-      cy = cmd === 'c' ? cy + (y as number) : (y as number)
-      if (points.length > 0) {
-        const prev = points[points.length - 1]
-        prev.outX = cp1x
-        prev.outY = cp1y
-      }
-      points.push({ x: cx, y: cy, inX: cp2x, inY: cp2y, mode: 'asymmetric' })
-      continue
-    }
-    return null
-  }
-  if (points.length < 2) return null
-  return { points, closed }
-}
 
 function syncOppositeHandle(
   points: PathPoint[],

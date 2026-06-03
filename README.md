@@ -67,6 +67,7 @@ Output installers land under `release/` when using `dist`.
 | Document | Audience | Contents |
 |----------|----------|----------|
 | [docs/README.md](docs/README.md) | Everyone | Documentation index and quick links |
+| [docs/PRODUCT_DOCUMENTATION.md](docs/PRODUCT_DOCUMENTATION.md) | Product & engineering | Full feature catalog with user flows and implementation |
 | [docs/user-guide.md](docs/user-guide.md) | Users | Modes, tools, panels, shortcuts, import/export, project workflow |
 | [docs/architecture-and-modules.md](docs/architecture-and-modules.md) | Developers | Repository layout, Electron IPC, stores, engines, types, workers |
 

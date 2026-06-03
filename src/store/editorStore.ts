@@ -6,7 +6,8 @@ import {
   type SymbolDefinition,
   type Transform,
   type VectorAttrValue,
-  type VectorElement
+  type VectorElement,
+  type VectorElementType
 } from '@/types/document'
 import type { GradientDef } from '@/types/gradient'
 import type {
@@ -32,6 +33,11 @@ export type ElementClipboardEntry = {
 import { mergeTransformFromTracks, sampleTrack } from '@/engines/animation/interpolate'
 import { sampleMergedTransformForElement } from '@/engines/animation/gsapTrackCompiler'
 import { getLocalShapeCenter } from '@/engines/geometry/localShapeBounds'
+import {
+  carryGeometryStyleAttrs,
+  elementGeometryToPathD,
+  parsePathDToPoints
+} from '@/engines/geometry/transformGeometry'
 import {
   ATTR_TEXT_STEP_PROPERTIES,
   hexToPackedRgb,
@@ -191,6 +197,9 @@ type EditorState = {
   canvasGuideVpTop: GuidePointNorm
   canvasGuideFisheyeCenter: GuidePointNorm
 
+  /** Show the per-element transform pivot marker on the selection overlay. */
+  showPivots: boolean
+
   historyPast: HistorySnapshot[]
   historyFuture: HistorySnapshot[]
 
@@ -262,6 +271,29 @@ type EditorState = {
   setGsapCanvasDriver: (v: boolean) => void
 
   updateTransform: (id: string, partial: Partial<Transform>, opts?: { skipHistory?: boolean }) => void
+  /**
+   * Replace an element's geometry (and optionally its type) in Draw mode. Used by
+   * the geometry-baking transform path: move/resize/rotate edits the actual points
+   * rather than stacking a transform matrix. Full attrs replacement (not a merge).
+   */
+  updateElementGeometry: (
+    id: string,
+    geom: { type?: VectorElementType; attrs: VectorElement['attrs'] },
+    opts?: { skipHistory?: boolean }
+  ) => void
+  /** Persist (or reset, with null) the element's local-space transform pivot. */
+  setElementPivot: (
+    id: string,
+    pivot: { x: number; y: number } | null,
+    opts?: { skipHistory?: boolean }
+  ) => void
+  /**
+   * Animate-mode geometry edit: ensures the element is a `path`, then writes the
+   * supplied local-space `d` as a `pathD` keyframe at the current playhead.
+   */
+  writeGeometryKeyframe: (id: string, localD: string, opts?: { skipHistory?: boolean }) => void
+  toggleShowPivots: () => void
+  setShowPivots: (v: boolean) => void
   setElementName: (id: string, name: string, opts?: { skipHistory?: boolean }) => void
   /** Replace the noise (wiggle) effects on a single element. Pushes history. */
   setElementNoise: (id: string, noise: NoiseDef[], opts?: { skipHistory?: boolean }) => void
@@ -505,6 +537,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
     canvasGuideVpRight: { nx: 1.35, ny: 0.52 },
     canvasGuideVpTop: { nx: 0.5, ny: -0.45 },
     canvasGuideFisheyeCenter: { nx: 0.5, ny: 0.5 },
+
+    showPivots: true,
 
     historyPast: [],
     historyFuture: [],
@@ -993,6 +1027,64 @@ export const useEditorStore = create<EditorState>((set, get) => {
         set({ project: { ...s0.project, elements: newEls }, tracks: newTracks })
       }
     },
+
+    updateElementGeometry: (id, geom, opts) =>
+      withHistory(
+        (s) => ({
+          project: {
+            ...s.project,
+            elements: updateElementById(s.project.elements, id, (el) => ({
+              ...el,
+              type: geom.type ?? el.type,
+              attrs: { ...geom.attrs }
+            }))
+          }
+        }),
+        opts
+      ),
+
+    setElementPivot: (id, pivot, opts) =>
+      withHistory(
+        (s) => ({
+          project: {
+            ...s.project,
+            elements: updateElementById(s.project.elements, id, (el) => ({
+              ...el,
+              pivot: pivot ?? undefined
+            }))
+          }
+        }),
+        opts
+      ),
+
+    writeGeometryKeyframe: (id, localD, opts) => {
+      const s0 = get()
+      const fresh = flattenForLayers(s0.project.elements).find((x) => x.el.id === id)?.el
+      if (!fresh || fresh.locked) return
+      /**
+       * pathD animation requires the element to be a `path`: `InnerShape` renders
+       * `d` only for paths. Convert the base element once (carrying style), seeding
+       * its base geometry from the un-transformed shape, then keyframe the supplied
+       * (already transformed) local `d` at the playhead.
+       */
+      if (fresh.type !== 'path') {
+        const baseD = elementGeometryToPathD(fresh) ?? localD
+        const parsed = parsePathDToPoints(baseD)
+        const nextAttrs: VectorElement['attrs'] = {
+          ...carryGeometryStyleAttrs(fresh.attrs),
+          d: baseD
+        }
+        if (parsed) nextAttrs.__pathPoints = parsed.points
+        get().updateElementGeometry(id, { type: 'path', attrs: nextAttrs }, { skipHistory: true })
+      }
+      get().upsertKeyframe(id, 'pathD', s0.currentTime, 0, undefined, {
+        valueText: localD,
+        skipHistory: opts?.skipHistory
+      })
+    },
+
+    toggleShowPivots: () => set((s) => ({ showPivots: !s.showPivots })),
+    setShowPivots: (v) => set({ showPivots: v }),
 
     setElementName: (id, name, opts) =>
       withHistory(

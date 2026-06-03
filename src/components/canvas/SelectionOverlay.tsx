@@ -5,8 +5,24 @@ import {
   applyTransformDragMove,
   buildTransformDragTargets,
   clientToSvg,
+  computeDragMatrix,
   type TransformDragTarget
 } from '@/components/canvas/selectionTransformDrag'
+import { flattenForLayers } from '@/engines/document/tree'
+import { getLocalShapeCenter } from '@/engines/geometry/localShapeBounds'
+import { sampleMergedAttrsForElement } from '@/engines/animation/gsapTrackCompiler'
+import {
+  applyToPoint,
+  bakeMatrixIntoElement,
+  elementGeometryToPathD,
+  invertMat,
+  isPointBakeType,
+  matFromDOM,
+  matFromTransform,
+  mul,
+  type Mat2D
+} from '@/engines/geometry/transformGeometry'
+import type { VectorElement } from '@/types/document'
 
 type Box = { left: number; top: number; width: number; height: number }
 
@@ -20,9 +36,28 @@ function svgToClient(svg: SVGSVGElement, x: number, y: number) {
   return { x: p.x, y: p.y }
 }
 
+function ctmAsMat(svg: SVGSVGElement, id: string): Mat2D | null {
+  const node = svg.querySelector(`[data-el-id="${CSS.escape(id)}"]`) as SVGGraphicsElement | null
+  const m = node?.getCTM?.()
+  return m ? matFromDOM(m) : null
+}
+
 type Props = {
   svgRef: React.RefObject<SVGSVGElement>
   wrapRef: React.RefObject<HTMLDivElement>
+}
+
+/** One element captured at gesture start so the absolute drag matrix can be applied idempotently. */
+type TierASnapshot = {
+  id: string
+  /** Original geometry (base in Draw, sampled-at-playhead in Animate) — never mutated. */
+  original: VectorElement
+  /** Element local -> SVG root, captured at start. */
+  L0: Mat2D
+  /** Inverse of L0. */
+  L0inv: Mat2D
+  /** Base transform as a matrix (flattened into geometry so transform resets to identity). */
+  T0: Mat2D
 }
 
 export function SelectionOverlay({ svgRef, wrapRef }: Props) {
@@ -37,32 +72,39 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
   const mode = useEditorStore((s) => s.mode)
   const activeTool = useEditorStore((s) => s.activeTool)
   const isPlaying = useEditorStore((s) => s.isPlaying)
+  const showPivots = useEditorStore((s) => s.showPivots)
   const updateTransform = useEditorStore((s) => s.updateTransform)
+  const updateElementGeometry = useEditorStore((s) => s.updateElementGeometry)
+  const setElementPivot = useEditorStore((s) => s.setElementPivot)
+  const writeGeometryKeyframe = useEditorStore((s) => s.writeGeometryKeyframe)
   const pushHistory = useEditorStore((s) => s.pushHistory)
 
   const [box, setBox] = useState<Box | null>(null)
   const [pivotMenuOpen, setPivotMenuOpen] = useState(false)
   const [pivotMenuPos, setPivotMenuPos] = useState<{ left: number; top: number } | null>(null)
-  const customPivotById = useRef<Record<string, { x: number; y: number }>>({})
+  /** Transient shared pivot for multi-selection (single selection uses persisted el.pivot). */
+  const sharedPivotById = useRef<Record<string, { x: number; y: number }>>({})
   const pivotMenuRef = useRef<HTMLDivElement | null>(null)
   const [, setPivotVersion] = useState(0)
   const drag = useRef<{
     kind: 'move' | 'scale' | 'rotate'
     startSvg: { x: number; y: number }
-    targets: TransformDragTarget[]
     pivotSvg: { x: number; y: number }
     startDist: number
     startAngle: number
+    tierA: TierASnapshot[]
+    tierBTargets: TransformDragTarget[]
   } | null>(null)
 
-  useLayoutEffect(() => {
+  const single = selectedIds.length === 1
+
+  const measure = () => {
     const svg = svgRef.current
     const wrap = wrapRef.current
     if (!svg || !wrap || selectedIds.length === 0) {
       setBox(null)
       return
     }
-
     let minLeft = Infinity
     let minTop = Infinity
     let maxRight = -Infinity
@@ -77,7 +119,12 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
       maxRight = Math.max(maxRight, r.right)
       maxBottom = Math.max(maxBottom, r.bottom)
     }
-    if (!Number.isFinite(minLeft) || !Number.isFinite(minTop) || !Number.isFinite(maxRight) || !Number.isFinite(maxBottom)) {
+    if (
+      !Number.isFinite(minLeft) ||
+      !Number.isFinite(minTop) ||
+      !Number.isFinite(maxRight) ||
+      !Number.isFinite(maxBottom)
+    ) {
       setBox(null)
       return
     }
@@ -89,42 +136,15 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
       width: maxRight - minLeft + pad * 2,
       height: maxBottom - minTop + pad * 2
     })
-  }, [selectedIds, elements, tracks, currentTime, viewBoxPanZoom, svgRef, wrapRef])
+  }
+
+  useLayoutEffect(measure, [selectedIds, elements, tracks, currentTime, viewBoxPanZoom, svgRef, wrapRef])
 
   useLayoutEffect(() => {
-    const onResize = () => {
-      const svg = svgRef.current
-      const wrap = wrapRef.current
-      if (!svg || !wrap || selectedIds.length === 0) return
-      let minLeft = Infinity
-      let minTop = Infinity
-      let maxRight = -Infinity
-      let maxBottom = -Infinity
-      for (const id of selectedIds) {
-        const el = svg.querySelector(`[data-el-id="${CSS.escape(id)}"]`) as SVGGraphicsElement | null
-        if (!el) continue
-        const r = el.getBoundingClientRect()
-        if (r.width < 1e-6 && r.height < 1e-6) continue
-        minLeft = Math.min(minLeft, r.left)
-        minTop = Math.min(minTop, r.top)
-        maxRight = Math.max(maxRight, r.right)
-        maxBottom = Math.max(maxBottom, r.bottom)
-      }
-      if (!Number.isFinite(minLeft) || !Number.isFinite(minTop) || !Number.isFinite(maxRight) || !Number.isFinite(maxBottom)) {
-        setBox(null)
-        return
-      }
-      const wrapRect = wrap.getBoundingClientRect()
-      const pad = 3
-      setBox({
-        left: minLeft - wrapRect.left - pad,
-        top: minTop - wrapRect.top - pad,
-        width: maxRight - minLeft + pad * 2,
-        height: maxBottom - minTop + pad * 2
-      })
-    }
+    const onResize = () => measure()
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIds, svgRef, wrapRef])
 
   useEffect(() => {
@@ -138,11 +158,7 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
     return () => window.removeEventListener('pointerdown', onPointerDown)
   }, [pivotMenuOpen])
 
-  /**
-   * Hide the selection overlay while the timeline is running so the user can watch
-   * playback unobstructed. The selection itself is preserved — pause and the
-   * handles reappear over the (now-stationary) element.
-   */
+  /** Hide the overlay during playback so users can watch animation unobstructed. */
   if (
     !selectedId ||
     !box ||
@@ -162,23 +178,64 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
   const rotCy = box.top - 6 - rotR
   const rotStemTop = box.top - 2
 
-  /** Scale + rotate pivot is top-left of visible selection border (requested behavior). */
   const wrapRect = wrap.getBoundingClientRect()
-  const defaultPivotSvg = clientToSvg(svg, box.left + wrapRect.left, box.top + wrapRect.top)
-  const pivotSvg = selectionKey
-    ? customPivotById.current[selectionKey] ?? defaultPivotSvg
-    : defaultPivotSvg
+  const boxCenterSvg = clientToSvg(
+    svg,
+    box.left + wrapRect.left + box.width / 2,
+    box.top + wrapRect.top + box.height / 2
+  )
+
+  /** Element local -> root for the (single) selected element. */
+  const singleEl = single ? flattenForLayers(elements).find((x) => x.el.id === selectedId)?.el ?? null : null
+  const L0Single = single && selectedId ? ctmAsMat(svg, selectedId) : null
+
+  /** Pivot in the element's LOCAL geometry space (single selection). */
+  const localPivotFor = (el: VectorElement, L0: Mat2D): { x: number; y: number } => {
+    if (el.pivot) return el.pivot
+    const c = getLocalShapeCenter(el)
+    if (c) return c
+    return applyToPoint(invertMat(L0), boxCenterSvg.x, boxCenterSvg.y)
+  }
+
+  const pivotSvg =
+    single && singleEl && L0Single
+      ? (() => {
+          const pl = localPivotFor(singleEl, L0Single)
+          return applyToPoint(L0Single, pl.x, pl.y)
+        })()
+      : (selectionKey ? sharedPivotById.current[selectionKey] : null) ?? boxCenterSvg
+
   const pivotClientAbs = svgToClient(svg, pivotSvg.x, pivotSvg.y)
   const pivotScreen = {
     left: pivotClientAbs.x - wrapRect.left,
     top: pivotClientAbs.y - wrapRect.top
   }
 
+  /** Persist (single) or stash (multi) a pivot expressed in SVG-root space. */
+  const commitPivotSvg = (rootX: number, rootY: number) => {
+    if (single && singleEl && L0Single) {
+      const local = applyToPoint(invertMat(L0Single), rootX, rootY)
+      setElementPivot(singleEl.id, { x: local.x, y: local.y }, { skipHistory: true })
+    } else if (selectionKey) {
+      sharedPivotById.current[selectionKey] = { x: rootX, y: rootY }
+      setPivotVersion((v) => v + 1)
+    }
+  }
+
   const setPivotFromBoxPoint = (px: number, py: number) => {
-    if (!selectionKey) return
     const p = clientToSvg(svg, wrapRect.left + px, wrapRect.top + py)
-    customPivotById.current[selectionKey] = p
-    setPivotVersion((v) => v + 1)
+    pushHistory()
+    commitPivotSvg(p.x, p.y)
+  }
+
+  const resetPivot = () => {
+    if (single && singleEl) {
+      pushHistory()
+      setElementPivot(singleEl.id, null, { skipHistory: true })
+    } else if (selectionKey) {
+      delete sharedPivotById.current[selectionKey]
+      setPivotVersion((v) => v + 1)
+    }
   }
 
   const onPivotPointerDown = (e: React.PointerEvent) => {
@@ -186,16 +243,13 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
     e.stopPropagation()
     e.preventDefault()
     const svgEl = svgRef.current
-    const sid = selectionKey
-    if (!svgEl || !sid) return
+    if (!svgEl) return
+    pushHistory()
     ;(e.target as Element).setPointerCapture(e.pointerId)
-
     const onMove = (ev: PointerEvent) => {
       const p = clientToSvg(svgEl, ev.clientX, ev.clientY)
-      customPivotById.current[sid] = { x: p.x, y: p.y }
-      setPivotVersion((v) => v + 1)
+      commitPivotSvg(p.x, p.y)
     }
-
     const onUp = (ev: PointerEvent) => {
       try {
         ;(e.target as Element).releasePointerCapture(ev.pointerId)
@@ -205,7 +259,6 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
-
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }
@@ -215,21 +268,59 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
       e.stopPropagation()
       e.preventDefault()
       const svgEl = svgRef.current
-      const wrap = wrapRef.current
-      if (!svgEl || !wrap) return
+      if (!svgEl) return
       const inAnim = mode === 'animate'
-      const transformTargets = buildTransformDragTargets(
-        svgEl,
-        elements,
-        selectedIds,
-        tracks,
-        inAnim ? currentTime : 0,
-        inAnim,
-        gsapCanvasDriver
-      )
-      if (transformTargets.length === 0) return
-      const startSvg = clientToSvg(svgEl, e.clientX, e.clientY)
+      const flat = flattenForLayers(elements)
+      const byId = new Map(flat.map((f) => [f.el.id, f.el]))
 
+      const tierA: TierASnapshot[] = []
+      const tierBIds: string[] = []
+      for (const id of selectedIds) {
+        const el = byId.get(id)
+        if (!el || el.locked) continue
+        if (isPointBakeType(el.type)) {
+          const L0 = ctmAsMat(svgEl, id)
+          if (!L0) {
+            tierBIds.push(id)
+            continue
+          }
+          /**
+           * Animate edits operate on the geometry visible at the playhead, so capture
+           * the sampled attrs; Draw edits operate on the resting base geometry.
+           */
+          const original: VectorElement = inAnim
+            ? {
+                ...el,
+                attrs: sampleMergedAttrsForElement(
+                  el,
+                  tracks,
+                  currentTime,
+                  gsapCanvasDriver
+                ) as VectorElement['attrs']
+              }
+            : el
+          tierA.push({ id, original, L0, L0inv: invertMat(L0), T0: matFromTransform(el.transform) })
+        } else {
+          tierBIds.push(id)
+        }
+      }
+
+      const tierBTargets =
+        tierBIds.length > 0
+          ? buildTransformDragTargets(
+              svgEl,
+              elements,
+              tierBIds,
+              tracks,
+              inAnim ? currentTime : 0,
+              inAnim,
+              gsapCanvasDriver
+            )
+          : []
+
+      if (tierA.length === 0 && tierBTargets.length === 0) return
+
+      const startSvg = clientToSvg(svgEl, e.clientX, e.clientY)
       const dx0 = startSvg.x - pivotSvg.x
       const dy0 = startSvg.y - pivotSvg.y
       const startDist = Math.hypot(dx0, dy0) || 1
@@ -238,10 +329,11 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
       drag.current = {
         kind,
         startSvg,
-        targets: transformTargets,
         pivotSvg,
         startDist,
-        startAngle
+        startAngle,
+        tierA,
+        tierBTargets
       }
       pushHistory()
       ;(e.target as Element).setPointerCapture(e.pointerId)
@@ -250,8 +342,7 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
         const d = drag.current
         if (!d || !svgRef.current) return
         const cur = clientToSvg(svgRef.current, ev.clientX, ev.clientY)
-        const updates = applyTransformDragMove(
-          d.targets,
+        const mRoot = computeDragMatrix(
           d.pivotSvg,
           d.startSvg,
           cur,
@@ -259,13 +350,48 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
           d.startAngle,
           d.kind
         )
-        for (const update of updates) {
-          updateTransform(update.id, update.partial, { skipHistory: true })
+
+        for (const t of d.tierA) {
+          /** Express the root-space gesture in the element's local geometry space, folding in T0. */
+          const mLocal = mul(t.T0, mul(t.L0inv, mul(mRoot, t.L0)))
+          const baked = bakeMatrixIntoElement(t.original, mLocal)
+          if (!baked) continue
+          if (inAnim) {
+            const localD =
+              baked.type === 'path' && typeof baked.attrs.d === 'string'
+                ? (baked.attrs.d as string)
+                : elementGeometryToPathD({ ...t.original, type: baked.type, attrs: baked.attrs })
+            if (localD) writeGeometryKeyframe(t.id, localD, { skipHistory: true })
+          } else {
+            updateElementGeometry(t.id, baked, { skipHistory: true })
+            updateTransform(
+              t.id,
+              { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, skewX: 0, skewY: 0 },
+              { skipHistory: true }
+            )
+          }
         }
-        if (d.kind === 'move' && selectionKey && customPivotById.current[selectionKey]) {
+
+        if (d.tierBTargets.length > 0) {
+          const updates = applyTransformDragMove(
+            d.tierBTargets,
+            d.pivotSvg,
+            d.startSvg,
+            cur,
+            d.startDist,
+            d.startAngle,
+            d.kind
+          )
+          for (const update of updates) {
+            updateTransform(update.id, update.partial, { skipHistory: true })
+          }
+        }
+
+        /** Keep a transient multi-selection pivot following a move gesture. */
+        if (d.kind === 'move' && !single && selectionKey && sharedPivotById.current[selectionKey]) {
           const dx = cur.x - d.startSvg.x
           const dy = cur.y - d.startSvg.y
-          customPivotById.current[selectionKey] = {
+          sharedPivotById.current[selectionKey] = {
             x: d.pivotSvg.x + dx,
             y: d.pivotSvg.y + dy
           }
@@ -378,43 +504,43 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
         }}
         onPointerDown={onPointerDown('rotate')}
       />
-      {/* Draggable pivot marker used by scale/rotate operations */}
-      <div
-        title="Drag to move pivot · right-click for presets · double-click to reset"
-        style={{
-          position: 'absolute',
-          left: pivotScreen.left - 5,
-          top: pivotScreen.top - 5,
-          width: 10,
-          height: 10,
-          borderRadius: '50%',
-          background: '#8b5cf6',
-          border: '2px solid #fff',
-          boxSizing: 'border-box',
-          pointerEvents: 'auto',
-          cursor: 'grab',
-          zIndex: 2
-        }}
-        onPointerDown={onPivotPointerDown}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          const wrapBounds = wrapRef.current?.getBoundingClientRect()
-          if (!wrapBounds) return
-          setPivotMenuPos({
-            left: e.clientX - wrapBounds.left + 4,
-            top: e.clientY - wrapBounds.top + 4
-          })
-          setPivotMenuOpen(true)
-        }}
-        onDoubleClick={(e) => {
-          e.stopPropagation()
-          if (!selectionKey) return
-          delete customPivotById.current[selectionKey]
-          setPivotVersion((v) => v + 1)
-        }}
-      />
-      {pivotMenuOpen && pivotMenuPos && (
+      {/* Draggable pivot marker — gated on the show-pivots toggle. */}
+      {showPivots && (
+        <div
+          title="Drag to move pivot · right-click for presets · double-click to reset"
+          style={{
+            position: 'absolute',
+            left: pivotScreen.left - 5,
+            top: pivotScreen.top - 5,
+            width: 10,
+            height: 10,
+            borderRadius: '50%',
+            background: '#8b5cf6',
+            border: '2px solid #fff',
+            boxSizing: 'border-box',
+            pointerEvents: 'auto',
+            cursor: 'grab',
+            zIndex: 2
+          }}
+          onPointerDown={onPivotPointerDown}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const wrapBounds = wrapRef.current?.getBoundingClientRect()
+            if (!wrapBounds) return
+            setPivotMenuPos({
+              left: e.clientX - wrapBounds.left + 4,
+              top: e.clientY - wrapBounds.top + 4
+            })
+            setPivotMenuOpen(true)
+          }}
+          onDoubleClick={(e) => {
+            e.stopPropagation()
+            resetPivot()
+          }}
+        />
+      )}
+      {showPivots && pivotMenuOpen && pivotMenuPos && (
         <div
           ref={pivotMenuRef}
           style={{
@@ -485,8 +611,7 @@ export function SelectionOverlay({ svgRef, wrapRef }: Props) {
               }}
               onClick={(e) => {
                 e.stopPropagation()
-                if (selectionKey) delete customPivotById.current[selectionKey]
-                setPivotVersion((v) => v + 1)
+                resetPivot()
                 setPivotMenuOpen(false)
                 setPivotMenuPos(null)
               }}
