@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faAnglesDown,
@@ -35,6 +35,90 @@ function collectGroupIdsWithChildren(roots: VectorElement[]): string[] {
   return out
 }
 
+type DropPlace = 'before' | 'after' | 'inside'
+
+function LayerNameField({
+  id,
+  name,
+  disabled,
+  onCommit
+}: {
+  id: string
+  name: string
+  disabled?: boolean
+  onCommit: (id: string, name: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(name)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setDraft(name)
+    setEditing(false)
+  }, [id, name])
+
+  useEffect(() => {
+    if (!editing) return
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [editing])
+
+  const commit = () => {
+    const next = draft.trim() || name
+    setDraft(next)
+    setEditing(false)
+    if (next !== name) onCommit(id, next)
+  }
+
+  const cancel = () => {
+    setDraft(name)
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={draft}
+        style={{ flex: 1, minWidth: 0, fontSize: 12 }}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') {
+            commit()
+            return
+          }
+          if (e.key === 'Escape') cancel()
+        }}
+        onBlur={commit}
+        onChange={(e) => setDraft(e.target.value)}
+      />
+    )
+  }
+
+  return (
+    <span
+      style={{
+        flex: 1,
+        minWidth: 0,
+        fontSize: 12,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        cursor: disabled ? 'default' : 'text'
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        if (disabled) return
+        setEditing(true)
+      }}
+    >
+      {name}
+    </span>
+  )
+}
+
 export function LayersPanel() {
   const elements = useEditorStore((s) => s.project.elements)
   const selectedIds = useEditorStore((s) => s.selectedIds)
@@ -61,13 +145,30 @@ export function LayersPanel() {
   )
   const collapsibleGroupIds = useMemo(() => collectGroupIdsWithChildren(elements), [elements])
   const [dragId, setDragId] = useState<string | null>(null)
-  const [dropHint, setDropHint] = useState<{ id: string; place: 'before' | 'after' } | null>(null)
+  const [dropHint, setDropHint] = useState<{ id: string; place: DropPlace } | null>(null)
 
   const onDropItem = (targetId: string) => {
     if (!dragId || dragId === targetId || !dropHint) return
+    if (dropHint.place === 'inside') {
+      reorderLayers(dragId, targetId, 'inside')
+      return
+    }
     /** Visual "before" (above in panel) maps to document "after" (higher in z-order). */
     const docPlace = dropHint.place === 'before' ? 'after' : 'before'
     reorderLayers(dragId, targetId, docPlace)
+  }
+
+  const resolveDropPlace = (
+    el: VectorElement,
+    clientY: number,
+    rect: DOMRect
+  ): DropPlace => {
+    const relY = (clientY - rect.top) / rect.height
+    if (el.type === 'group') {
+      if (relY > 0.28 && relY < 0.72) return 'inside'
+      return relY < 0.5 ? 'before' : 'after'
+    }
+    return clientY < rect.top + rect.height / 2 ? 'before' : 'after'
   }
 
   return (
@@ -134,6 +235,10 @@ export function LayersPanel() {
               display: 'flex',
               alignItems: 'center',
               gap: 4,
+              background:
+                dropHint?.id === el.id && dropHint.place === 'inside'
+                  ? 'color-mix(in srgb, var(--accent) 14%, transparent)'
+                  : undefined,
               borderTop:
                 dropHint?.id === el.id && dropHint.place === 'before'
                   ? '1px solid var(--accent)'
@@ -146,8 +251,7 @@ export function LayersPanel() {
             onDragOver={(e) => {
               e.preventDefault()
               const rect = (e.currentTarget as HTMLLIElement).getBoundingClientRect()
-              const midpoint = rect.top + rect.height / 2
-              setDropHint({ id: el.id, place: e.clientY < midpoint ? 'before' : 'after' })
+              setDropHint({ id: el.id, place: resolveDropPlace(el, e.clientY, rect) })
             }}
             onDrop={(e) => {
               e.preventDefault()
@@ -256,19 +360,11 @@ export function LayersPanel() {
               <FontAwesomeIcon icon={el.locked ? faLock : faLockOpen} />
             </button>
             </Tooltip>
-            <input
-              type="text"
-              value={el.name}
-              style={{ flex: 1, minWidth: 0, fontSize: 12 }}
-              onClick={(e) => e.stopPropagation()}
-              /**
-               * Block global shortcuts while renaming a layer — see TopBar's
-               * project-name input for the same rationale. Without this, a
-               * stray Backspace would delete the selected layer instead of
-               * editing the name.
-               */
-              onKeyDown={(e) => e.stopPropagation()}
-              onChange={(e) => setElementName(el.id, e.target.value)}
+            <LayerNameField
+              id={el.id}
+              name={el.name}
+              disabled={mode === 'preview' || mode === 'export'}
+              onCommit={setElementName}
             />
             <Tooltip content={`Copy layer id (${el.id})`}>
             <button
