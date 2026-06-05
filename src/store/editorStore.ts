@@ -58,7 +58,7 @@ import {
   insertElement,
   purgeElementsByIds,
   removeElementById,
-  reorderSiblings,
+  moveElementRelative,
   stripSymbolInstancesByMasterId,
   updateElementById
 } from '@/engines/document/tree'
@@ -313,7 +313,12 @@ type EditorState = {
   ) => void
   toggleVisible: (id: string, opts?: { skipHistory?: boolean }) => void
   toggleLock: (id: string, opts?: { skipHistory?: boolean }) => void
-  reorderLayers: (dragId: string, targetId: string, place: 'before' | 'after', opts?: { skipHistory?: boolean }) => void
+  reorderLayers: (
+    dragId: string,
+    targetId: string,
+    place: 'before' | 'after' | 'inside',
+    opts?: { skipHistory?: boolean }
+  ) => void
   deleteSelected: (opts?: { skipHistory?: boolean }) => void
   deleteLayerById: (id: string, opts?: { skipHistory?: boolean }) => void
   /** Wraps 2+ selected sibling layers in a new group (preserves child ids and tracks). */
@@ -1240,7 +1245,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         (s) => ({
           project: {
             ...s.project,
-            elements: reorderSiblings(s.project.elements, dragId, targetId, place)
+            elements: moveElementRelative(s.project.elements, dragId, targetId, place)
           }
         }),
         opts

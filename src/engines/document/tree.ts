@@ -115,6 +115,66 @@ export function insertElement(
   })
 }
 
+/** True when `candidateId` lives anywhere under `ancestorId` (not including ancestor itself). */
+export function isDescendantOf(
+  roots: VectorElement[],
+  ancestorId: string,
+  candidateId: string
+): boolean {
+  const loc = findElement(roots, ancestorId)
+  if (!loc?.node.children?.length) return false
+  const walk = (nodes: VectorElement[]): boolean => {
+    for (const n of nodes) {
+      if (n.id === candidateId) return true
+      if (n.children?.length && walk(n.children)) return true
+    }
+    return false
+  }
+  return walk(loc.node.children)
+}
+
+/**
+ * Move `dragId` relative to `targetId`, optionally into a group (`inside`).
+ * Supports cross-parent moves (e.g. out of a group to root, or into an existing group).
+ */
+export function moveElementRelative(
+  roots: VectorElement[],
+  dragId: string,
+  targetId: string,
+  place: 'before' | 'after' | 'inside'
+): VectorElement[] {
+  if (dragId === targetId) return roots
+  if (isDescendantOf(roots, dragId, targetId)) return roots
+
+  const dragLoc = findElement(roots, dragId)
+  const targetLoc = findElement(roots, targetId)
+  if (!dragLoc || !targetLoc) return roots
+
+  const removed = dragLoc.node
+  const next = removeElementById(roots, dragId)
+
+  if (place === 'inside') {
+    if (targetLoc.node.type !== 'group') return roots
+    return updateElementById(next, targetId, (g) => ({
+      ...g,
+      children: [...(g.children ?? []), removed]
+    }))
+  }
+
+  const targetLoc2 = findElement(next, targetId)
+  if (!targetLoc2) return roots
+
+  const parentId = targetLoc2.parent?.id ?? null
+  const list = [...targetLoc2.siblings]
+  const targetIdx = list.findIndex((e) => e.id === targetId)
+  if (targetIdx < 0) return roots
+  const insertAt = place === 'before' ? targetIdx : targetIdx + 1
+  list.splice(insertAt, 0, removed)
+
+  if (parentId === null) return list
+  return updateElementById(next, parentId, (p) => ({ ...p, children: list }))
+}
+
 /** Move dragId before/after targetId within the same parent (or both root). */
 export function reorderSiblings(
   roots: VectorElement[],
@@ -122,27 +182,7 @@ export function reorderSiblings(
   targetId: string,
   place: 'before' | 'after'
 ): VectorElement[] {
-  if (dragId === targetId) return roots
-  const dragLoc = findElement(roots, dragId)
-  const targetLoc = findElement(roots, targetId)
-  if (!dragLoc || !targetLoc) return roots
-  const sameParent =
-    (dragLoc.parent === null && targetLoc.parent === null) ||
-    (dragLoc.parent !== null &&
-      targetLoc.parent !== null &&
-      dragLoc.parent.id === targetLoc.parent.id)
-  if (!sameParent) return roots
-
-  const parentId = dragLoc.parent?.id ?? null
-  const list = dragLoc.siblings.filter((e) => e.id !== dragId)
-  const removed = dragLoc.node
-  const targetIdx = list.findIndex((e) => e.id === targetId)
-  if (targetIdx < 0) return roots
-  const insertAt = place === 'before' ? targetIdx : targetIdx + 1
-  list.splice(insertAt, 0, removed)
-
-  if (parentId === null) return list
-  return mapElements(roots, (el) => (el.id === parentId ? { ...el, children: list } : el))
+  return moveElementRelative(roots, dragId, targetId, place)
 }
 
 /** Chain from root to target (inclusive), for accumulating SVG transforms. */
